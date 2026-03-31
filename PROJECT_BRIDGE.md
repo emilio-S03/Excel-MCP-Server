@@ -10,9 +10,9 @@
 
 - **Version:** 2.0.0
 - **Status:** Production-ready, 56 tools (55 base + style_chart)
-- **Platform:** Windows 11 (user's machine) — AppleScript features are Mac-only, not active
-- **Location:** `C:\Users\emjsa\mcp-servers\excel-mcp-server\`
-- **Config:** `C:\Users\emjsa\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+- **Platform:** Windows 11 — AppleScript features are Mac-only, not active
+- **Location:** `[project-root]/`
+- **Config:** Claude Desktop config (check your system for exact path)
 - **Build:** TypeScript → `dist/` via `npm run build`
 - **Entry point:** `dist/index.js` (run via `node`)
 
@@ -145,7 +145,7 @@ src/
   - **`dataSheetName` parameter** — place chart on Dashboard, pull data from another sheet
 - **Desktop testing needed:**
   1. `excel_create_chart` with Dashboard data — will now either bind data or throw `CHART_BIND_FAILED` with tier-by-tier errors (never silently return success with 0 series)
-  2. `excel_create_chart` with `dataSheetName: "Net_Worth"` — isolates Dashboard sheet issues
+  2. `excel_create_chart` with `dataSheetName: "[DataSheet]"` — isolates Dashboard sheet issues
   3. Check `bindingTier` in response to see which approach worked
   4. If Tier 4 (hardcoded) also fails → confirms Dashboard sheet itself rejects chart series (possible protection or corruption)
 
@@ -171,9 +171,7 @@ _Move old session log entries here when the file gets long._
 
 ### 2026-03-13 — Claude Desktop — Phase 2 build + COM resilience testing
 - **Tested Code's Fix 1-4:** After Excel restart, all VBA tools (get/set/run) recovered. `excel_diagnose_connection` worked perfectly — 6/6 checks passed. Confirmed the Chr(9888) crash root cause: replaced with ASCII `[!]`, macro ran clean.
-- **Built Debt_Tracker sheet:** Current balances pulled from Balances_Norm, baseline comparison (Jan 30 vs Mar 12), avalanche payoff projections with formulas. Warning for Chase Freedom 0% expiry.
-- **Built Net_Worth sheet:** 42 daily snapshots (Jan 30 – Mar 12), assets vs liabilities breakdown, daily change column, summary section. Starting NW: -$5,076, Current: -$8,591.
-- **Built Spending_Analysis sheet (earlier this session):** 25 months x 44 categories from Transactions_Clean, monthly totals + income row.
+- **Built sample dashboard sheets** with formulas and data validation.
 - **Known issue confirmed:** VBA COM tools do NOT survive a crashed macro in the same session. Restarting Excel is the only recovery. Code's Fix 1 (error wrapper) should prevent the crash in the first place, but if it fails, the session is dead for VBA tools.
 - **Anti-pattern documented:** Never use Chr() with values >255 in VBA strings sent via COM. Use ASCII alternatives.
 
@@ -182,96 +180,56 @@ _Move old session log entries here when the file gets long._
 **Status:** Shapes work perfectly. Charts still broken. COM dropped at end of session.
 
 **What was built successfully:**
-- Title bar, 4 KPI cards (with live values: -$8,591, -$15,369, $9,104, Oct 2026), 3 chart card containers — all via VBA `Shapes.AddShape`. `autoSize` on `excel_add_shape` confirmed working for shrinkToFit.
+- Title bar, KPI cards, chart card containers — all via VBA `Shapes.AddShape`. `autoSize` on `excel_add_shape` confirmed working for shrinkToFit.
 - Canvas: navy background (#1B2A4A), gridlines hidden, headers hidden, column widths set.
 - All shapes survive nuke/rebuild cycles reliably.
 
 **What is still broken — `excel_create_chart` produces 0 series:**
-- `excel_create_chart` returns `success: true` with message "Real line chart created" — but the chart has **0 series**. Every time.
-- Tested with `dataRange: "AH1:AI15"` on Dashboard (dates + numbers), and without `dataSheetName`.
+- `excel_create_chart` returns `success: true` but the chart has **0 series**. Every time.
 - `excel_style_chart` then crashes at `$chart.SeriesCollection(1)` → "Parameter not valid" because there's nothing to style.
 - **VBA manual testing confirms the same:** `SetSourceData`, `NewSeries` with range refs, and `NewSeries` with direct assignment ALL fail with "Parameter not valid" when targeting charts on the Dashboard sheet.
-- The v3 three-tier fallback does NOT appear to be firing — the tool returns success with no fallback indicators, yet series count is 0. Hypothesis: `$ErrorActionPreference = 'Stop'` may not be reaching the chart creation PowerShell scope, OR the chart creation code path returns success before the fallback code runs.
-
-**Diagnostic evidence:**
-- VBA `ChkChart` macro confirmed: `Chart.SeriesCollection.Count = 0` on every chart created by `excel_create_chart`.
-- VBA `ChartDiag3` attempted manual `SetSourceData` and `NewSeries` on the same chart objects — both fail with "Parameter not valid".
-- Data in AH1:AI15 is confirmed valid (dates in AH, doubles in AI, headers in row 1). Data in AH20:AI24 (debt) and AH30:AI38 (spending) also confirmed valid.
-- Dashboard cell writes via VBA to BA/AZ columns sometimes don't persist (race condition? stale COM handle?). Writes to _Config sheet untested.
-- COM connection eventually dropped after ~25 tool calls in the session.
+- The v3 three-tier fallback does NOT appear to be firing — the tool returns success with no fallback indicators, yet series count is 0.
 
 **Root cause hypothesis:**
-The `excel_create_chart` PowerShell is creating charts via `ChartObjects().Add()` which creates an **empty** chart object. The subsequent `SetSourceData` or `NewSeries` calls are silently failing or not executing at all. The function returns success based on the ChartObject creation, not on data binding. The three-tier fallback may be in a code path that isn't reached, or `$ErrorActionPreference = 'Stop'` isn't propagating into the chart data binding scope.
+The `excel_create_chart` PowerShell is creating charts via `ChartObjects().Add()` which creates an **empty** chart object. The subsequent `SetSourceData` or `NewSeries` calls are silently failing. The function returns success based on the ChartObject creation, not on data binding.
 
 **Recommended fix for Claude Code:**
 1. **Add explicit series count validation** after data binding — if `SeriesCollection.Count -eq 0` after all 3 tiers, throw an error instead of returning success.
-2. **Add diagnostic output** to the chart creation return: include `seriesCount`, `fallbackTier` (which tier succeeded), and if all fail, the specific error from each tier.
-3. **Test the array extraction tier (tier 3) in isolation** — write a standalone PowerShell snippet that creates a chart via `ChartObjects().Add()`, then does `NewSeries()` with hardcoded `@(-5076, -5140, -9953)` array values. If THAT works, the issue is in tier 1-2 range marshaling. If it fails, the issue is deeper (maybe chart type incompatibility or a Dashboard sheet-level protection).
-4. **Consider testing on a non-Dashboard sheet** — create a chart on `_Config` or a new scratch sheet with the same data range to rule out Dashboard-specific issues.
-5. The `dataSheetName` parameter was not successfully tested — the first test used `dataSheetName: "Dashboard"` (same sheet) which doesn't help isolate the issue. Need to test with `dataSheetName: "Net_Worth"` pulling from a clean sheet.
-
-**Dashboard state after session:**
-- All shapes were nuked at end (FullNuke ran). Dashboard is a blank navy canvas with data in hidden columns (AA:AI).
-- Module1 contains the last macro written (`FullNuke`). All prior macros (BuildAllShapes, etc.) were overwritten.
-- No charts exist.
-- To rebuild: run BuildAllShapes VBA (needs to be re-written to Module1), then fix chart creation.
-
+2. **Add diagnostic output** to the chart creation return: include `seriesCount`, `fallbackTier`, and specific errors from each tier.
+3. **Test the array extraction tier (tier 3) in isolation** with hardcoded values.
+4. **Consider testing on a non-Dashboard sheet** to rule out sheet-specific issues.
+5. Test `dataSheetName` parameter pulling data from a different sheet.
 
 ### 2026-03-13 — Claude Desktop — Dashboard COMPLETE + bug reports for Code
 
 **Status:** Dashboard fully functional. Charts render with real data. Layout rebuilt at proper scale.
 
 **What works now:**
-- `excel_create_chart` v4 (NewSeries-Array tier) **confirmed working** — all 3 charts bind data successfully. Response includes `bindingTier: "NewSeries-Array"`, `seriesCount: 1`. The v3 fix from Code resolved the 0-series issue.
-- `excel_style_chart` works for: series fill color, chart/plot area fills, axis formatting (font, color, size, numberFormat, gridline color), legend hide, title hide, chart size/position.
-- VBA macros work reliably for: shape creation, chart repositioning (`ZOrder msoBringToFront`), x-axis label override (date serial → formatted "m/d"), data label application.
-- Full dashboard layout: title bar, 4 KPI cards (accent stripes, labels, values), 3 chart cards with titles, all proportionally sized at 936pt usable width.
-
-**Dashboard current state:**
-- Sheet: `Dashboard` in `Finances.xlsm`
-- Zoom: 100%, gridlines hidden, headers hidden
-- Shapes: Title bar + 4 KPI cards + 3 chart card backgrounds + labels (all via VBA `RebuildDashboard` macro)
-- Charts: 3 ChartObjects (NW line, Debt bar, Spending bar) styled and positioned inside cards via `StyleAndPositionCharts` macro
-- Data source: hidden cols AH:AI on Dashboard sheet (NW=AH1:AI15, Debt=AH20:AI24, Spending=AH30:AI38)
-- KPI source: AB1:AB4 (formulas linking to Net_Worth and Debt_Tracker sheets)
-- Module1 contains: `StyleAndPositionCharts` (last written macro — overwrites previous)
+- `excel_create_chart` v4 (NewSeries-Array tier) **confirmed working** — charts bind data successfully. Response includes `bindingTier: "NewSeries-Array"`, `seriesCount: 1`.
+- `excel_style_chart` works for: series fill color, chart/plot area fills, axis formatting, legend, title, chart size/position.
+- VBA macros work reliably for: shape creation, chart repositioning, x-axis label override, data label application.
 
 **BUG 1 — `excel_style_chart` DataLabels crash (NEEDS FIX)**
 - **Trigger:** Passing `dataLabels: { show: true, numberFormat: "$#,##0", fontColor: "#FFFFFF", fontSize: 8 }` in the `series` array
-- **Error:** `PropertyAssignmentException: The property 'NumberFormat' cannot be found on this object` and `The property 'Size' cannot be found on this object`
-- **Root cause:** `$ErrorActionPreference = 'Stop'` makes non-critical DataLabels property assignments terminate the entire styling call. The DataLabels COM object properties (`NumberFormat`, `Font.Size`, `Font.Color`) may use different property paths than expected, OR the DataLabels object isn't fully initialized when accessed immediately after `.HasDataLabels = $true`.
-- **Workaround used:** Applied data labels via VBA macro instead of `excel_style_chart`. Works perfectly in VBA.
-- **Recommended fix:** Wrap each DataLabels property assignment in its own try/catch block inside `excel-powershell.ts` so one failure doesn't kill the whole call. Also add a small delay or re-fetch after setting `HasDataLabels = $true` before accessing properties. Test: `$series.DataLabels.NumberFormat` vs `$series.DataLabels.Item(1).NumberFormat` — the collection accessor may differ.
+- **Error:** `PropertyAssignmentException: The property 'NumberFormat' cannot be found on this object`
+- **Root cause:** `$ErrorActionPreference = 'Stop'` makes non-critical DataLabels property assignments terminate the entire styling call. The DataLabels object may not be fully initialized when accessed immediately after `.HasDataLabels = $true`.
+- **Recommended fix:** Wrap each DataLabels property assignment in its own try/catch block. Add a re-fetch after setting `HasDataLabels = $true`.
 
-**BUG 2 — Net Worth chart x-axis shows serial date numbers**
-- **Trigger:** `excel_create_chart` with date values in the XValues column (column AH contains Excel date serials like 46052, 46055...)
-- **Behavior:** The NewSeries-Array tier extracts cell values as raw doubles, so dates become serial numbers (46052 instead of "1/30"). Chart displays "46052" on x-axis.
-- **Workaround used:** VBA macro overrides XValues with a string array of `Format(date, "m/d")` labels after chart creation.
-- **Recommended fix:** In the array extraction tier, detect date-formatted cells (check `$cell.NumberFormat` for date patterns like "m/d/yyyy", "mm/dd/yy", etc.) and convert to formatted string instead of raw double. Or add a `dateFormat` parameter to `excel_create_chart` that applies to XValues.
+**BUG 2 — Chart x-axis shows serial date numbers**
+- **Trigger:** `excel_create_chart` with date values in the XValues column
+- **Behavior:** NewSeries-Array tier extracts cell values as raw doubles, so dates become serial numbers (46052 instead of "1/30").
+- **Recommended fix:** Detect date-formatted cells (check `$cell.NumberFormat`) and convert to formatted string instead of raw double.
 
 **BUG 3 (minor) — `set_vba_code` overwrites entire module**
-- Not a bug per se, but a constraint that bit us multiple times. Writing a new macro to Module1 deletes all previous macros. Desktop workaround: always include ALL needed macros in a single `set_vba_code` call.
-- **Suggestion:** Consider adding an `appendMode` parameter that appends the Sub/Function to existing module code instead of replacing it.
-
-**Sheet3 deletion:** Already gone (deleted in a prior session or never existed in current file state).
-
-**Next planned work:**
-- Dashboard polish (tighten layout, clean remaining visual issues)
-- Format data sheets (Spending_Analysis, Debt_Tracker, Net_Worth) with design system
-
+- Writing a new macro to Module1 deletes all previous macros.
+- **Suggestion:** Add an `appendMode` parameter that appends to existing module code.
 
 ### 2026-03-20 — Claude Code — Capture index push + bridge sync
-- Pushed `capture-index/index.json` (15 entries) to GitHub repo `AOLUX003/claude_config` — first-ever population of the learning audit dedup index.
-- Verified EXCEL_MCP_LEARNINGS.md sections 9-11 (7 new entries) — clean, no append artifacts.
-- Caught and reverted encoding corruption in `learning-audit/SKILL.md` (Desktop's read/write mangled `→` to `â†'`). Only clean capture-index committed.
-- Read AUDIT_IMPLEMENTATION_SYNC.md — aware of excel-design-system v2.0 hard-stop gate, prompt-guard v3.0 Pattern 6, memory edits #25/#26.
-- Updated bridge file: header date, tool count consistency.
+- Pushed learning audit capture index to GitHub.
+- Caught and reverted encoding corruption in a skill file.
 - **No MCP server changes needed.** Audit confirmed all failures were behavioral, not tooling.
 
 ### 2026-03-20 — Claude Desktop — Thread audit implementation (no server changes)
-- Completed implementation of all Desktop-scope items from GS-ForecastCalc thread audit (1,927 lines, 40+ failures).
-- **No MCP server bugs or feature requests from this audit.** All findings were behavioral (Claude skipping existing protocols), not tooling gaps.
-- Updated skills: excel-design-system v2.0 (hard-stop enforcement gate), prompt-guard v3.0 (Pattern 6).
-- Updated EXCEL_MCP_LEARNINGS.md in Obsidian vault: added sections 9-11 (7 new entries — chart ops, formula direction, column addressing).
-- Full sync doc at: `C:\Users\emjsa\Desktop\EMJCLaude\projects\gs-forecastcalc\AUDIT_IMPLEMENTATION_SYNC.md`
-- **For Code:** Item T remains — push `claude_config/capture-index/index.json` to GitHub. Handoff at `C:\Users\emjsa\Desktop\CLAUDE_CODE_AUDIT_HANDOFF.md`.
+- Completed implementation of audit findings. All findings were behavioral (Claude skipping existing protocols), not tooling gaps.
+- Updated skills: excel-design-system v2.0 (hard-stop enforcement gate).
+- **No MCP server bugs or feature requests from this audit.**

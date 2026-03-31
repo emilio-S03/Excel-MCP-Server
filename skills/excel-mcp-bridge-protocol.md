@@ -2,7 +2,7 @@
 
 ## The Problem
 
-The user maintains a custom Excel MCP Server — a TypeScript project that gives Claude Desktop the ability to read, write, format, and analyze Excel spreadsheets. It has 34 tools and lives at `C:\Users\emjsa\mcp-servers\excel-mcp-server\`.
+The user maintains a custom Excel MCP Server — a TypeScript project that gives Claude Desktop the ability to read, write, format, and analyze Excel spreadsheets. It has 34 tools and lives at `[project-root]\`.
 
 This project is actively developed and maintained using **two separate Claude interfaces:**
 
@@ -17,7 +17,7 @@ This project is actively developed and maintained using **two separate Claude in
 
 A single shared file acts as a bridge:
 
-**`C:\Users\emjsa\mcp-servers\excel-mcp-server\PROJECT_BRIDGE.md`**
+**`[project-root]\PROJECT_BRIDGE.md`**
 
 This file contains:
 - **Current State** — version, status, platform, build info
@@ -33,7 +33,7 @@ Both Claude Code and Claude Desktop read this file at the start of every session
 
 ### At the START of every session involving the Excel MCP Server:
 
-1. **Read the bridge file** — Use your file reading capability to read `C:\Users\emjsa\mcp-servers\excel-mcp-server\PROJECT_BRIDGE.md`
+1. **Read the bridge file** — Use your file reading capability to read `[project-root]\PROJECT_BRIDGE.md`
 2. **Check the session log** — See what Claude Code (or a previous Desktop session) did most recently
 3. **Note any known issues** — So you don't run into the same bugs or re-report something already tracked
 
@@ -61,7 +61,7 @@ Both Claude Code and Claude Desktop read this file at the start of every session
 - **Non-developer.** They use plain-English prompts to direct Claude. Don't use jargon or assume coding knowledge.
 - **"Vibe coder."** They describe what they want, and Claude builds it. They evaluate results by whether things work, not by reading code.
 - **Windows 11.** The Excel MCP server runs on Windows. Any AppleScript/Mac-related features in the codebase are inactive and irrelevant.
-- **Claude Desktop is the Windows Store version.** Config is at `C:\Users\emjsa\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json` (not the usual AppData\Roaming path).
+- **Claude Desktop is the Windows Store version.** Config is at the Windows Store app data path (not the usual AppData\Roaming path). Check your system for the exact location.
 
 ## Important Context About the Project
 

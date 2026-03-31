@@ -228,6 +228,6 @@ The `config` object is passed to the server and stored in `userConfig` (index.ts
 When building or restyling Excel dashboards, ALWAYS read these files first:
 
 - `skills/EXCEL_ADVANCED_DESIGN_REFERENCE.md` — Comprehensive design guide inspired by Josh Cottrell-Schloemer's methodology. Covers card layouts, color palettes, VBA shape techniques, chart restyling, typography scale, and COM-safe patterns. This is the PRIMARY design reference.
-- `skills/excel-design-system.md` — Soracom-specific design tokens and semantic formatting rules.
+- `skills/excel-design-system.md` — Project-specific design tokens and semantic formatting rules.
 
 **Key principle:** Treat Excel like PowerPoint. Use shapes as card containers, layer charts on transparent backgrounds over styled cards, use curated color palettes (never Excel defaults), and follow the AAE rule (Always Align Everything).
