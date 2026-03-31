@@ -1,4 +1,5 @@
 import { loadWorkbook, getSheet, saveWorkbook, parseRange } from './helpers.js';
+import { isExcelRunningLive, isFileOpenInExcelLive, createTableLive, saveFileLive } from './excel-live.js';
 
 export async function createTable(
   filePath: string,
@@ -12,11 +13,31 @@ export async function createTable(
   showColumnStripes: boolean = false,
   createBackup: boolean = false
 ): Promise<string> {
+  // Parse range for validation
+  const { startRow, startCol, endRow, endCol } = parseRange(range);
+
+  // Check if Excel is running and file is open — use COM if so
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
+
+  if (fileOpen) {
+    await createTableLive(filePath, sheetName, range, tableName, tableStyle);
+    await saveFileLive(filePath);
+
+    return JSON.stringify({
+      success: true,
+      message: `Table "${tableName}" created via COM`,
+      range,
+      tableName,
+      style: tableStyle,
+      method: 'live',
+      note: 'Native Excel table created. Visible immediately in Excel.',
+    }, null, 2);
+  }
+
+  // ExcelJS fallback
   const workbook = await loadWorkbook(filePath);
   const sheet = getSheet(workbook, sheetName);
-
-  // Parse range
-  const { startRow, startCol, endRow, endCol } = parseRange(range);
 
   // Read the headers from the first row
   const headerRow = sheet.getRow(startRow);
@@ -26,7 +47,6 @@ export async function createTable(
     headers.push({ name: cell.value?.toString() || `Column${col}` });
   }
 
-  // ExcelJS supports tables
   sheet.addTable({
     name: tableName,
     ref: range,
@@ -53,5 +73,6 @@ export async function createTable(
     style: tableStyle,
     columns: headers.length,
     rows: endRow - startRow,
+    method: 'exceljs',
   }, null, 2);
 }

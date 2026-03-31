@@ -1,4 +1,5 @@
 import { loadWorkbook, getSheet, saveWorkbook, parseRange } from './helpers.js';
+import { isExcelRunningLive, isFileOpenInExcelLive, createPivotTableLive, saveFileLive } from './excel-live.js';
 
 export async function createPivotTable(
   filePath: string,
@@ -11,6 +12,23 @@ export async function createPivotTable(
   values: Array<{ field: string; aggregation: 'sum' | 'count' | 'average' | 'min' | 'max' }>,
   createBackup: boolean = false
 ): Promise<string> {
+  // Check if Excel is running — use real COM pivot table if so
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
+
+  if (fileOpen) {
+    await createPivotTableLive(filePath, sourceSheetName, sourceRange, targetSheetName, targetCell, rows, values);
+    await saveFileLive(filePath);
+
+    return JSON.stringify({
+      success: true,
+      message: `Real pivot table created at ${targetSheetName}!${targetCell}`,
+      method: 'live',
+      note: 'Native Excel pivot table created via COM. Visible immediately in Excel with full pivot functionality.',
+    }, null, 2);
+  }
+
+  // ExcelJS fallback — manual aggregation
   const workbook = await loadWorkbook(filePath);
   const sourceSheet = getSheet(workbook, sourceSheetName);
   const targetSheet = getSheet(workbook, targetSheetName);

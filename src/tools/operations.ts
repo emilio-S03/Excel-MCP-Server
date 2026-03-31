@@ -1,11 +1,11 @@
 import { loadWorkbook, getSheet, saveWorkbook, parseRange, columnLetterToNumber } from './helpers.js';
 import {
-  isExcelRunning,
-  isFileOpenInExcel,
-  deleteRowsViaAppleScript,
-  deleteColumnsViaAppleScript,
-  saveFileViaAppleScript,
-} from './excel-applescript.js';
+  isExcelRunningLive,
+  isFileOpenInExcelLive,
+  deleteRowsLive,
+  deleteColumnsLive,
+  saveFileLive,
+} from './excel-live.js';
 
 export async function deleteRows(
   filePath: string,
@@ -16,27 +16,27 @@ export async function deleteRows(
 ): Promise<string> {
   console.error(`[deleteRows] Starting operation: file="${filePath}", sheet="${sheetName}", startRow=${startRow}, count=${count}`);
 
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    // AppleScript path - file is open in Excel
-    console.error(`[deleteRows] Using AppleScript (file is open in Excel)`);
+    // Live editing path - file is open in Excel
+    console.error(`[deleteRows] Using live editing (file is open in Excel)`);
     try {
-      await deleteRowsViaAppleScript(filePath, sheetName, startRow, count);
-      await saveFileViaAppleScript(filePath);
+      await deleteRowsLive(filePath, sheetName, startRow, count);
+      await saveFileLive(filePath);
 
-      console.error(`[deleteRows] AppleScript operation completed successfully`);
+      console.error(`[deleteRows] Live editing operation completed successfully`);
       return JSON.stringify({
         success: true,
         message: `Deleted ${count} row(s) starting from row ${startRow}`,
         startRow,
         count,
-        method: 'applescript',
+        method: 'live',
         note: 'Changes visible immediately in open Excel file',
       }, null, 2);
     } catch (error: any) {
-      console.error(`[deleteRows] AppleScript failed, falling back to ExcelJS:`, error.message);
+      console.error(`[deleteRows] Live editing failed, falling back to ExcelJS:`, error.message);
       // Fall through to ExcelJS fallback
     }
   }
@@ -68,28 +68,28 @@ export async function deleteColumns(
 ): Promise<string> {
   console.error(`[deleteColumns] Starting operation: file="${filePath}", sheet="${sheetName}", startColumn=${startColumn}, count=${count}`);
 
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    // AppleScript path - file is open in Excel
-    console.error(`[deleteColumns] Using AppleScript (file is open in Excel)`);
+    // Live editing path - file is open in Excel
+    console.error(`[deleteColumns] Using live editing (file is open in Excel)`);
     try {
-      // Pass startColumn directly (can be string or number - AppleScript helper handles both)
-      await deleteColumnsViaAppleScript(filePath, sheetName, startColumn, count);
-      await saveFileViaAppleScript(filePath);
+      // Pass startColumn directly (can be string or number - handler handles both)
+      await deleteColumnsLive(filePath, sheetName, startColumn, count);
+      await saveFileLive(filePath);
 
-      console.error(`[deleteColumns] AppleScript operation completed successfully`);
+      console.error(`[deleteColumns] Live editing operation completed successfully`);
       return JSON.stringify({
         success: true,
         message: `Deleted ${count} column(s) starting from column ${startColumn}`,
         startColumn,
         count,
-        method: 'applescript',
+        method: 'live',
         note: 'Changes visible immediately in open Excel file',
       }, null, 2);
     } catch (error: any) {
-      console.error(`[deleteColumns] AppleScript failed, falling back to ExcelJS:`, error.message);
+      console.error(`[deleteColumns] Live editing failed, falling back to ExcelJS:`, error.message);
       // Fall through to ExcelJS fallback
     }
   }

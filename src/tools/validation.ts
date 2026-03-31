@@ -1,4 +1,10 @@
-import { loadWorkbook, getSheet } from './helpers.js';
+import { loadWorkbook, getSheet, saveWorkbook } from './helpers.js';
+import {
+  isExcelRunningLive,
+  isFileOpenInExcelLive,
+  setDataValidationLive,
+  saveFileLive,
+} from './excel-live.js';
 import type { ResponseFormat } from '../types.js';
 
 export async function validateFormulaSyntax(formula: string): Promise<string> {
@@ -145,4 +151,88 @@ export async function getDataValidationInfo(
   }
 
   return JSON.stringify(cellInfo, null, 2);
+}
+
+export async function setDataValidation(
+  filePath: string,
+  sheetName: string,
+  range: string,
+  validationType: string,
+  formula1: string,
+  operator?: string,
+  formula2?: string,
+  showErrorMessage: boolean = true,
+  errorTitle: string = 'Invalid Input',
+  errorMessage: string = 'The value entered is not valid.',
+  createBackup: boolean = false
+): Promise<string> {
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
+
+  if (fileOpen) {
+    await setDataValidationLive(
+      filePath, sheetName, range, validationType, formula1,
+      operator, formula2, showErrorMessage, errorTitle, errorMessage
+    );
+    await saveFileLive(filePath);
+
+    return JSON.stringify({
+      success: true,
+      message: `Data validation set on ${range}`,
+      range,
+      validationType,
+      method: 'live',
+      note: 'Changes visible immediately in Excel',
+    }, null, 2);
+  } else {
+    const workbook = await loadWorkbook(filePath);
+    const sheet = getSheet(workbook, sheetName);
+
+    // ExcelJS data validation
+    const typeMap: Record<string, string> = {
+      list: 'list',
+      whole: 'whole',
+      decimal: 'decimal',
+      date: 'date',
+      textLength: 'textLength',
+      custom: 'custom',
+    };
+
+    const validationConfig: any = {
+      type: typeMap[validationType] || 'list',
+      showErrorMessage,
+      errorTitle,
+      error: errorMessage,
+    };
+
+    if (validationType === 'list') {
+      validationConfig.formulae = [formula1];
+    } else {
+      validationConfig.operator = operator || 'between';
+      validationConfig.formulae = formula2 ? [formula1, formula2] : [formula1];
+    }
+
+    // Parse range and apply validation to each cell
+    const rangeMatch = range.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+    if (rangeMatch) {
+      const [, startColStr, startRowStr, , endRowStr] = rangeMatch;
+      const startRow = parseInt(startRowStr);
+      const endRow = parseInt(endRowStr);
+
+      for (let row = startRow; row <= endRow; row++) {
+        const cell = sheet.getCell(`${startColStr}${row}`);
+        cell.dataValidation = validationConfig;
+      }
+    }
+
+    await saveWorkbook(workbook, filePath, createBackup);
+
+    return JSON.stringify({
+      success: true,
+      message: `Data validation set on ${range}`,
+      range,
+      validationType,
+      method: 'exceljs',
+    }, null, 2);
+  }
 }

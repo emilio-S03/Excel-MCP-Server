@@ -1,12 +1,13 @@
 import { loadWorkbook, getSheet, saveWorkbook } from './helpers.js';
 import {
-  isExcelRunning,
-  isFileOpenInExcel,
-  createSheetViaAppleScript,
-  deleteSheetViaAppleScript,
-  renameSheetViaAppleScript,
-  saveFileViaAppleScript,
-} from './excel-applescript.js';
+  isExcelRunningLive,
+  isFileOpenInExcelLive,
+  createSheetLive,
+  deleteSheetLive,
+  renameSheetLive,
+  setSheetProtectionLive,
+  saveFileLive,
+} from './excel-live.js';
 
 export async function createSheet(
   filePath: string,
@@ -14,8 +15,8 @@ export async function createSheet(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and if the file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
     // Check if sheet already exists via ExcelJS (need to load workbook for validation)
@@ -24,15 +25,15 @@ export async function createSheet(
       throw new Error(`Sheet "${sheetName}" already exists`);
     }
 
-    // AppleScript path
-    await createSheetViaAppleScript(filePath, sheetName);
-    await saveFileViaAppleScript(filePath);
+    // Live editing path
+    await createSheetLive(filePath, sheetName);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Sheet "${sheetName}" created`,
       sheetName,
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -62,23 +63,23 @@ export async function deleteSheet(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and if the file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
     // Validate sheet exists via ExcelJS (need to load workbook for validation)
     const workbook = await loadWorkbook(filePath);
     getSheet(workbook, sheetName); // Throws if sheet doesn't exist
 
-    // AppleScript path
-    await deleteSheetViaAppleScript(filePath, sheetName);
-    await saveFileViaAppleScript(filePath);
+    // Live editing path
+    await deleteSheetLive(filePath, sheetName);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Sheet "${sheetName}" deleted`,
       sheetName,
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -105,8 +106,8 @@ export async function renameSheet(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and if the file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
     // Check if new name already exists via ExcelJS (need to load workbook for validation)
@@ -117,16 +118,16 @@ export async function renameSheet(
       throw new Error(`Sheet "${newName}" already exists`);
     }
 
-    // AppleScript path
-    await renameSheetViaAppleScript(filePath, oldName, newName);
-    await saveFileViaAppleScript(filePath);
+    // Live editing path
+    await renameSheetLive(filePath, oldName, newName);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Sheet renamed from "${oldName}" to "${newName}"`,
       oldName,
       newName,
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -211,4 +212,71 @@ export async function duplicateSheet(
     newSheetName,
     rowsCopied: sourceSheet.rowCount,
   }, null, 2);
+}
+
+export async function setSheetProtection(
+  filePath: string,
+  sheetName: string,
+  protect: boolean,
+  password?: string,
+  options?: {
+    allowInsertRows?: boolean;
+    allowInsertColumns?: boolean;
+    allowDeleteRows?: boolean;
+    allowDeleteColumns?: boolean;
+    allowSort?: boolean;
+    allowAutoFilter?: boolean;
+    allowFormatCells?: boolean;
+    allowFormatColumns?: boolean;
+    allowFormatRows?: boolean;
+  },
+  createBackup: boolean = false
+): Promise<string> {
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
+
+  if (fileOpen) {
+    await setSheetProtectionLive(filePath, sheetName, protect, password, options);
+    await saveFileLive(filePath);
+
+    return JSON.stringify({
+      success: true,
+      message: protect ? `Sheet "${sheetName}" protected` : `Sheet "${sheetName}" unprotected`,
+      sheetName,
+      protect,
+      method: 'live',
+      note: 'Changes visible immediately in Excel',
+    }, null, 2);
+  } else {
+    const workbook = await loadWorkbook(filePath);
+    const sheet = getSheet(workbook, sheetName);
+
+    if (protect) {
+      const protectionOptions: any = {};
+      if (options) {
+        protectionOptions.insertRows = options.allowInsertRows || false;
+        protectionOptions.insertColumns = options.allowInsertColumns || false;
+        protectionOptions.deleteRows = options.allowDeleteRows || false;
+        protectionOptions.deleteColumns = options.allowDeleteColumns || false;
+        protectionOptions.sort = options.allowSort || false;
+        protectionOptions.autoFilter = options.allowAutoFilter || false;
+        protectionOptions.formatCells = options.allowFormatCells || false;
+        protectionOptions.formatColumns = options.allowFormatColumns || false;
+        protectionOptions.formatRows = options.allowFormatRows || false;
+      }
+      sheet.protect(password || '', protectionOptions);
+    } else {
+      sheet.unprotect();
+    }
+
+    await saveWorkbook(workbook, filePath, createBackup);
+
+    return JSON.stringify({
+      success: true,
+      message: protect ? `Sheet "${sheetName}" protected` : `Sheet "${sheetName}" unprotected`,
+      sheetName,
+      protect,
+      method: 'exceljs',
+    }, null, 2);
+  }
 }

@@ -1,14 +1,16 @@
 import type { CellFormat } from '../types.js';
 import { loadWorkbook, getSheet, saveWorkbook, columnLetterToNumber } from './helpers.js';
 import {
-  isExcelRunning,
-  isFileOpenInExcel,
-  formatCellViaAppleScript,
-  setColumnWidthViaAppleScript,
-  setRowHeightViaAppleScript,
-  mergeCellsViaAppleScript,
-  saveFileViaAppleScript,
-} from './excel-applescript.js';
+  isExcelRunningLive,
+  isFileOpenInExcelLive,
+  formatCellLive,
+  setColumnWidthLive,
+  setRowHeightLive,
+  mergeCellsLive,
+  saveFileLive,
+  batchFormatLive,
+} from './excel-live.js';
+import { ERROR_MESSAGES } from '../constants.js';
 
 export async function formatCell(
   filePath: string,
@@ -18,15 +20,15 @@ export async function formatCell(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    // AppleScript path - format cell in real-time
-    console.error(`[formatCell] Using AppleScript for real-time editing`);
+    // Live editing path - format cell in real-time
+    console.error(`[formatCell] Using live editing for real-time editing`);
 
-    // Convert CellFormat to AppleScript format
-    const appleScriptFormat: {
+    // Convert CellFormat to live editing format
+    const liveFormat: {
       fontName?: string;
       fontSize?: number;
       fontBold?: boolean;
@@ -38,31 +40,31 @@ export async function formatCell(
     } = {};
 
     if (format.font) {
-      if (format.font.name) appleScriptFormat.fontName = format.font.name;
-      if (format.font.size) appleScriptFormat.fontSize = format.font.size;
-      if (format.font.bold !== undefined) appleScriptFormat.fontBold = format.font.bold;
-      if (format.font.italic !== undefined) appleScriptFormat.fontItalic = format.font.italic;
-      if (format.font.color) appleScriptFormat.fontColor = format.font.color;
+      if (format.font.name) liveFormat.fontName = format.font.name;
+      if (format.font.size) liveFormat.fontSize = format.font.size;
+      if (format.font.bold !== undefined) liveFormat.fontBold = format.font.bold;
+      if (format.font.italic !== undefined) liveFormat.fontItalic = format.font.italic;
+      if (format.font.color) liveFormat.fontColor = format.font.color;
     }
 
     if (format.fill && format.fill.fgColor) {
-      appleScriptFormat.fillColor = format.fill.fgColor;
+      liveFormat.fillColor = format.fill.fgColor;
     }
 
     if (format.alignment) {
-      if (format.alignment.horizontal) appleScriptFormat.horizontalAlignment = format.alignment.horizontal;
-      if (format.alignment.vertical) appleScriptFormat.verticalAlignment = format.alignment.vertical;
+      if (format.alignment.horizontal) liveFormat.horizontalAlignment = format.alignment.horizontal;
+      if (format.alignment.vertical) liveFormat.verticalAlignment = format.alignment.vertical;
     }
 
-    await formatCellViaAppleScript(filePath, sheetName, cellAddress, appleScriptFormat);
-    await saveFileViaAppleScript(filePath);
+    await formatCellLive(filePath, sheetName, cellAddress, liveFormat);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Cell ${cellAddress} formatted`,
       cellAddress,
       appliedFormats: Object.keys(format),
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -161,22 +163,22 @@ export async function setColumnWidth(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    // AppleScript path - set column width in real-time
-    console.error(`[setColumnWidth] Using AppleScript for real-time editing`);
+    // Live editing path - set column width in real-time
+    console.error(`[setColumnWidth] Using live editing for real-time editing`);
 
-    await setColumnWidthViaAppleScript(filePath, sheetName, column, width);
-    await saveFileViaAppleScript(filePath);
+    await setColumnWidthLive(filePath, sheetName, column, width);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Column ${column} width set to ${width}`,
       column,
       width,
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -211,22 +213,22 @@ export async function setRowHeight(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    // AppleScript path - set row height in real-time
-    console.error(`[setRowHeight] Using AppleScript for real-time editing`);
+    // Live editing path - set row height in real-time
+    console.error(`[setRowHeight] Using live editing for real-time editing`);
 
-    await setRowHeightViaAppleScript(filePath, sheetName, row, height);
-    await saveFileViaAppleScript(filePath);
+    await setRowHeightLive(filePath, sheetName, row, height);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Row ${row} height set to ${height}`,
       row,
       height,
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -260,21 +262,21 @@ export async function mergeCells(
   createBackup: boolean = false
 ): Promise<string> {
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    // AppleScript path - merge cells in real-time
-    console.error(`[mergeCells] Using AppleScript for real-time editing`);
+    // Live editing path - merge cells in real-time
+    console.error(`[mergeCells] Using live editing for real-time editing`);
 
-    await mergeCellsViaAppleScript(filePath, sheetName, range);
-    await saveFileViaAppleScript(filePath);
+    await mergeCellsLive(filePath, sheetName, range);
+    await saveFileLive(filePath);
 
     return JSON.stringify({
       success: true,
       message: `Cells merged in range ${range}`,
       range,
-      method: 'applescript',
+      method: 'live',
       note: 'Changes visible immediately in Excel',
     }, null, 2);
   } else {
@@ -296,4 +298,50 @@ export async function mergeCells(
       note: 'File updated. Open in Excel to see changes.',
     }, null, 2);
   }
+}
+
+export async function batchFormat(
+  filePath: string,
+  sheetName: string,
+  operations: Array<{
+    range: string;
+    merge?: boolean;
+    unmerge?: boolean;
+    value?: string | number;
+    fontName?: string;
+    fontSize?: number;
+    fontBold?: boolean;
+    fontItalic?: boolean;
+    fontColor?: string;
+    fillColor?: string;
+    horizontalAlignment?: string;
+    verticalAlignment?: string;
+    numberFormat?: string;
+    columnWidth?: number;
+    rowHeight?: number;
+    borderStyle?: string;
+    borderColor?: string;
+    wrapText?: boolean;
+    autoFit?: boolean;
+  }>
+): Promise<string> {
+  // This tool requires Excel to be running — it uses COM for bulk operations
+  const excelRunning = await isExcelRunningLive();
+  if (!excelRunning) {
+    throw new Error(ERROR_MESSAGES.EXCEL_NOT_RUNNING);
+  }
+  const fileOpen = await isFileOpenInExcelLive(filePath);
+  if (!fileOpen) {
+    throw new Error(ERROR_MESSAGES.EXCEL_NOT_RUNNING);
+  }
+
+  await batchFormatLive(filePath, sheetName, operations);
+
+  return JSON.stringify({
+    success: true,
+    message: `Applied ${operations.length} formatting operations to sheet "${sheetName}"`,
+    operationCount: operations.length,
+    method: 'live',
+    note: 'All formatting applied in a single batch. Changes visible immediately in Excel.',
+  }, null, 2);
 }

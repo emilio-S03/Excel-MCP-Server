@@ -1,13 +1,13 @@
 import { loadWorkbook, getSheet, saveWorkbook, columnLetterToNumber, formatDataAsTable } from './helpers.js';
 import type { ResponseFormat } from '../types.js';
 import {
-  isExcelRunning,
-  isFileOpenInExcel,
-  insertRowsViaAppleScript,
-  insertColumnsViaAppleScript,
-  unmergeCellsViaAppleScript,
-  saveFileViaAppleScript,
-} from './excel-applescript.js';
+  isExcelRunningLive,
+  isFileOpenInExcelLive,
+  insertRowsLive,
+  insertColumnsLive,
+  unmergeCellsLive,
+  saveFileLive,
+} from './excel-live.js';
 
 export async function insertRows(
   filePath: string,
@@ -19,28 +19,28 @@ export async function insertRows(
   console.error(`[insertRows] Starting operation for ${filePath}, sheet: ${sheetName}, startRow: ${startRow}, count: ${count}`);
 
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    console.error(`[insertRows] File is open in Excel, using AppleScript path`);
+    console.error(`[insertRows] File is open in Excel, using live editing path`);
     try {
-      // AppleScript path - direct manipulation of open file
-      await insertRowsViaAppleScript(filePath, sheetName, startRow, count);
-      await saveFileViaAppleScript(filePath);
+      // Live editing path - direct manipulation of open file
+      await insertRowsLive(filePath, sheetName, startRow, count);
+      await saveFileLive(filePath);
 
-      console.error(`[insertRows] Successfully inserted ${count} row(s) via AppleScript`);
+      console.error(`[insertRows] Successfully inserted ${count} row(s) via live editing`);
 
       return JSON.stringify({
         success: true,
         message: `Inserted ${count} row(s) at row ${startRow}`,
         startRow,
         count,
-        method: 'applescript',
+        method: 'live',
         note: 'Changes visible immediately in Excel',
       }, null, 2);
     } catch (error: any) {
-      console.error(`[insertRows] AppleScript failed, falling back to ExcelJS:`, error.message);
+      console.error(`[insertRows] Live editing failed, falling back to ExcelJS:`, error.message);
       // Fall through to ExcelJS fallback
     }
   }
@@ -76,29 +76,28 @@ export async function insertColumns(
   console.error(`[insertColumns] Starting operation for ${filePath}, sheet: ${sheetName}, startColumn: ${startColumn}, count: ${count}`);
 
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    console.error(`[insertColumns] File is open in Excel, using AppleScript path`);
+    console.error(`[insertColumns] File is open in Excel, using live editing path`);
     try {
-      // AppleScript path - direct manipulation of open file
-      // insertColumnsViaAppleScript accepts string | number for column
-      await insertColumnsViaAppleScript(filePath, sheetName, startColumn, count);
-      await saveFileViaAppleScript(filePath);
+      // Live editing path - direct manipulation of open file
+      await insertColumnsLive(filePath, sheetName, startColumn, count);
+      await saveFileLive(filePath);
 
-      console.error(`[insertColumns] Successfully inserted ${count} column(s) via AppleScript`);
+      console.error(`[insertColumns] Successfully inserted ${count} column(s) via live editing`);
 
       return JSON.stringify({
         success: true,
         message: `Inserted ${count} column(s) at column ${startColumn}`,
         startColumn,
         count,
-        method: 'applescript',
+        method: 'live',
         note: 'Changes visible immediately in Excel',
       }, null, 2);
     } catch (error: any) {
-      console.error(`[insertColumns] AppleScript failed, falling back to ExcelJS:`, error.message);
+      console.error(`[insertColumns] Live editing failed, falling back to ExcelJS:`, error.message);
       // Fall through to ExcelJS fallback
     }
   }
@@ -135,27 +134,27 @@ export async function unmergeCells(
   console.error(`[unmergeCells] Starting operation for ${filePath}, sheet: ${sheetName}, range: ${range}`);
 
   // Check if Excel is running and file is open
-  const excelRunning = await isExcelRunning();
-  const fileOpen = excelRunning ? await isFileOpenInExcel(filePath) : false;
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
   if (fileOpen) {
-    console.error(`[unmergeCells] File is open in Excel, using AppleScript path`);
+    console.error(`[unmergeCells] File is open in Excel, using live editing path`);
     try {
-      // AppleScript path - direct manipulation of open file
-      await unmergeCellsViaAppleScript(filePath, sheetName, range);
-      await saveFileViaAppleScript(filePath);
+      // Live editing path - direct manipulation of open file
+      await unmergeCellsLive(filePath, sheetName, range);
+      await saveFileLive(filePath);
 
-      console.error(`[unmergeCells] Successfully unmerged cells via AppleScript`);
+      console.error(`[unmergeCells] Successfully unmerged cells via live editing`);
 
       return JSON.stringify({
         success: true,
         message: `Cells unmerged in range ${range}`,
         range,
-        method: 'applescript',
+        method: 'live',
         note: 'Changes visible immediately in Excel',
       }, null, 2);
     } catch (error: any) {
-      console.error(`[unmergeCells] AppleScript failed, falling back to ExcelJS:`, error.message);
+      console.error(`[unmergeCells] Live editing failed, falling back to ExcelJS:`, error.message);
       // Fall through to ExcelJS fallback
     }
   }

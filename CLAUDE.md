@@ -2,9 +2,45 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Bridge File Protocol
+
+**Bridge file:** `PROJECT_BRIDGE.md` in this directory — shared memory between Claude Code (terminal) and Claude Desktop.
+
+### AT SESSION START:
+1. Read `PROJECT_BRIDGE.md`
+2. Check the **session log** for recent Claude Desktop entries — these contain structured error reports from testing that need to be acted on
+3. Check **Known Issues** for bugs Desktop discovered
+4. Check **Backlog** for feature requests Desktop logged
+
+### ACTING ON DESKTOP ERROR LOGS:
+Desktop logs errors in this format in the session log:
+```
+- **Tool:** excel_set_vba_code
+- **Error:** HRESULT 0x800ADF09
+- **Trigger:** Chr(9888) in VBA string (Unicode outside 0-255)
+- **Impact:** All VBA COM tools dead for remainder of session
+- **Workaround:** Restart Excel
+```
+When you see these entries: diagnose the root cause in the source code, implement a fix, and update Known Issues to mark the bug as fixed.
+
+### AT SESSION END (when changes were made):
+1. Update "Current State" if version, status, or tool count changed
+2. Update "Known Issues" — add bugs found, mark fixed bugs as resolved
+3. Update "Backlog" — add items, mark completed items `[x]`
+4. Add a session log entry:
+   ```
+   ### [Date] — Claude Code — [Summary]
+   - What was changed and why
+   - Which Desktop-reported bugs were fixed (reference the Desktop log entry)
+   - What still needs testing
+   ```
+
+### RELATED FILES (reference only):
+- `skills/excel-mcp-bridge-protocol.md` — Full Desktop-side protocol (read to understand what Desktop logs and how)
+
 ## Project Overview
 
-This is an Excel MCP (Model Context Protocol) Server built with TypeScript and ExcelJS. It provides 34 comprehensive tools for Excel file manipulation through the MCP protocol, enabling Claude Desktop and other MCP clients to read, write, format, and analyze Excel spreadsheets.
+This is an Excel MCP (Model Context Protocol) Server built with TypeScript and ExcelJS. It provides 55 comprehensive tools for Excel file manipulation through the MCP protocol, enabling Claude Desktop and other MCP clients to read, write, format, and analyze Excel spreadsheets.
 
 **Key Technologies:**
 - TypeScript with strict mode enabled
@@ -49,7 +85,7 @@ Creates a distributable `.mcpb` bundle file for one-click installation.
 
 ### Entry Point: `src/index.ts`
 - Creates MCP server instance with stdio transport
-- Registers all 34 tools with their schemas
+- Registers all 55 tools with their schemas
 - Handles tool invocation routing to appropriate handlers
 - Manages user configuration (backups, response formats, allowed directories)
 - Provides centralized error handling with Zod validation
@@ -185,3 +221,13 @@ Users configure the server in `claude_desktop_config.json`:
 ```
 
 The `config` object is passed to the server and stored in `userConfig` (index.ts). Access it when implementing tools that need these settings.
+
+
+## Design System
+
+When building or restyling Excel dashboards, ALWAYS read these files first:
+
+- `skills/EXCEL_ADVANCED_DESIGN_REFERENCE.md` — Comprehensive design guide inspired by Josh Cottrell-Schloemer's methodology. Covers card layouts, color palettes, VBA shape techniques, chart restyling, typography scale, and COM-safe patterns. This is the PRIMARY design reference.
+- `skills/excel-design-system.md` — Soracom-specific design tokens and semantic formatting rules.
+
+**Key principle:** Treat Excel like PowerPoint. Use shapes as card containers, layer charts on transparent backgrounds over styled cards, use curated color palettes (never Excel defaults), and follow the AAE rule (Always Align Everything).

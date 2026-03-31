@@ -1,4 +1,5 @@
 import { loadWorkbook, getSheet, saveWorkbook, parseRange } from './helpers.js';
+import { isExcelRunningLive, isFileOpenInExcelLive, applyConditionalFormatLive, saveFileLive } from './excel-live.js';
 
 export async function applyConditionalFormat(
   filePath: string,
@@ -28,17 +29,32 @@ export async function applyConditionalFormat(
   },
   createBackup: boolean = false
 ): Promise<string> {
+  // Parse range for validation
+  const { startRow, startCol, endRow, endCol } = parseRange(range);
+
+  // Check if Excel is running and file is open — use COM if so
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
+
+  if (fileOpen) {
+    await applyConditionalFormatLive(filePath, sheetName, range, ruleType, condition, style as any, colorScale);
+    await saveFileLive(filePath);
+
+    return JSON.stringify({
+      success: true,
+      message: `Conditional formatting applied to ${range} via COM`,
+      range,
+      ruleType,
+      method: 'live',
+      note: 'Native Excel conditional formatting applied. Visible immediately in Excel.',
+    }, null, 2);
+  }
+
+  // ExcelJS fallback
   const workbook = await loadWorkbook(filePath);
   const sheet = getSheet(workbook, sheetName);
 
-  // Parse range
-  const { startRow, startCol, endRow, endCol } = parseRange(range);
-
-  // ExcelJS has limited conditional formatting support
-  // This is a workaround that applies formatting based on conditions
-
   if (ruleType === 'cellValue' && condition && style) {
-    // Apply cell value conditional formatting
     for (let row = startRow; row <= endRow; row++) {
       for (let col = startCol; col <= endCol; col++) {
         const cell = sheet.getRow(row).getCell(col);
@@ -46,7 +62,6 @@ export async function applyConditionalFormat(
 
         let shouldApplyStyle = false;
 
-        // Check condition
         switch (condition.operator) {
           case 'greaterThan':
             shouldApplyStyle = Number(cellValue) > Number(condition.value);
@@ -70,7 +85,6 @@ export async function applyConditionalFormat(
         }
 
         if (shouldApplyStyle) {
-          // Apply style
           if (style.font) {
             cell.font = {
               ...cell.font,
@@ -90,12 +104,10 @@ export async function applyConditionalFormat(
       }
     }
   } else if (ruleType === 'colorScale') {
-    // Apply color scale
-    const minColor = colorScale?.minColor || 'FFFF0000'; // Red
-    const maxColor = colorScale?.maxColor || 'FF00FF00'; // Green
+    const minColor = colorScale?.minColor || 'FFFF0000';
+    const maxColor = colorScale?.maxColor || 'FF00FF00';
     const midColor = colorScale?.midColor;
 
-    // Collect all numeric values in range
     const values: number[] = [];
     for (let row = startRow; row <= endRow; row++) {
       for (let col = startCol; col <= endCol; col++) {
@@ -111,7 +123,6 @@ export async function applyConditionalFormat(
     const maxValue = Math.max(...values);
     const range_span = maxValue - minValue;
 
-    // Apply gradient colors
     for (let row = startRow; row <= endRow; row++) {
       for (let col = startCol; col <= endCol; col++) {
         const cell = sheet.getRow(row).getCell(col);
@@ -120,16 +131,12 @@ export async function applyConditionalFormat(
         if (!isNaN(value)) {
           const percentage = range_span === 0 ? 0.5 : (value - minValue) / range_span;
 
-          // Simple color interpolation
           let color: string;
           if (midColor && percentage < 0.5) {
-            // Interpolate between min and mid
             color = minColor;
           } else if (midColor && percentage >= 0.5) {
-            // Interpolate between mid and max
             color = maxColor;
           } else {
-            // Interpolate between min and max
             color = percentage < 0.5 ? minColor : maxColor;
           }
 
@@ -150,6 +157,7 @@ export async function applyConditionalFormat(
     message: `Conditional formatting applied to ${range}`,
     range,
     ruleType,
-    note: 'This is a simplified implementation. Native Excel conditional formatting has more features.',
+    method: 'exceljs',
+    note: 'Simplified ExcelJS implementation. Open file in Excel for native conditional formatting.',
   }, null, 2);
 }

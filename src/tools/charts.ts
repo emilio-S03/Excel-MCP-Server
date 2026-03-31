@@ -1,4 +1,6 @@
 import { loadWorkbook, getSheet, saveWorkbook, parseRange } from './helpers.js';
+import { isExcelRunningLive, isFileOpenInExcelLive, createChartLive, styleChartLive, saveFileLive } from './excel-live.js';
+import { ERROR_MESSAGES } from '../constants.js';
 
 export async function createChart(
   filePath: string,
@@ -8,19 +10,47 @@ export async function createChart(
   position: string,
   title?: string,
   showLegend: boolean = true,
-  createBackup: boolean = false
+  createBackup: boolean = false,
+  dataSheetName?: string
 ): Promise<string> {
-  const workbook = await loadWorkbook(filePath);
-  const sheet = getSheet(workbook, sheetName);
-
   // Validate the data range
   parseRange(dataRange);
 
-  // Note: ExcelJS has limited chart support compared to the native Excel API
-  // This is a simplified implementation that works with ExcelJS capabilities
+  // Check if Excel is running and file is open — use real COM chart if so
+  const excelRunning = await isExcelRunningLive();
+  const fileOpen = excelRunning ? await isFileOpenInExcelLive(filePath) : false;
 
-  // For ExcelJS, we need to use the worksheet's addImage method with chart-like data
-  // Since ExcelJS doesn't have full native chart support, we'll create a note about this
+  if (fileOpen) {
+    const diagnostics = await createChartLive(filePath, sheetName, chartType, dataRange, position, title, showLegend, dataSheetName);
+    await saveFileLive(filePath);
+
+    // Parse diagnostics: "tier=SetSourceData|seriesCount=1|rows=15|cols=2"
+    const diag: Record<string, string> = {};
+    for (const part of diagnostics.split('|')) {
+      const [k, v] = part.split('=');
+      if (k && v) diag[k.trim()] = v.trim();
+    }
+
+    return JSON.stringify({
+      success: true,
+      message: `Real ${chartType} chart created at ${position}`,
+      chartType,
+      dataRange,
+      dataSheetName: dataSheetName || sheetName,
+      position,
+      title,
+      method: 'live',
+      bindingTier: diag['tier'] || 'unknown',
+      seriesCount: parseInt(diag['seriesCount'] || '0'),
+      dataRows: parseInt(diag['rows'] || '0'),
+      dataCols: parseInt(diag['cols'] || '0'),
+      note: `Chart data bound via ${diag['tier'] || 'unknown'} tier. ${diag['seriesCount'] || 0} series from ${diag['rows'] || '?'} rows x ${diag['cols'] || '?'} cols.`,
+    }, null, 2);
+  }
+
+  // ExcelJS fallback — placeholder only
+  const workbook = await loadWorkbook(filePath);
+  const sheet = getSheet(workbook, sheetName);
 
   const chartInfo = {
     type: chartType,
@@ -28,15 +58,13 @@ export async function createChart(
     position,
     title,
     showLegend,
-    note: 'Chart placeholder created. For full chart support, use native Excel automation or libraries with full chart APIs.'
+    note: 'Chart placeholder created. Open file in Excel for full chart support.'
   };
 
-  // Add a comment/note at the position indicating the chart
   const posCell = sheet.getCell(position);
   posCell.value = title || `${chartType.toUpperCase()} Chart`;
   posCell.note = JSON.stringify(chartInfo, null, 2);
 
-  // Apply some visual formatting to indicate it's a chart placeholder
   posCell.font = { bold: true, size: 14 };
   posCell.fill = {
     type: 'pattern',
@@ -49,11 +77,58 @@ export async function createChart(
   return JSON.stringify({
     success: true,
     message: `Chart placeholder created at ${position}`,
-    note: 'ExcelJS has limited native chart support. The chart metadata has been saved as a cell note.',
+    note: 'ExcelJS has limited native chart support. Open the file in Excel and use excel_create_chart with Excel running for real charts.',
     chartType,
     dataRange,
     position,
     title,
-    recommendation: 'For full chart creation, consider using Python openpyxl or native Excel automation.',
+    method: 'exceljs',
+  }, null, 2);
+}
+
+export async function styleChart(
+  filePath: string,
+  sheetName: string,
+  chartIndex: number | undefined,
+  chartName: string | undefined,
+  config: {
+    series?: Array<{
+      index: number;
+      color?: string;
+      lineWeight?: number;
+      markerStyle?: string;
+      markerSize?: number;
+      dataLabels?: { show: boolean; numberFormat?: string; fontSize?: number; fontColor?: string; position?: string };
+    }>;
+    axes?: {
+      category?: { visible?: boolean; numberFormat?: string; fontSize?: number; fontColor?: string; labelRotation?: number };
+      value?: { visible?: boolean; numberFormat?: string; fontSize?: number; fontColor?: string; min?: number; max?: number; gridlines?: boolean };
+    };
+    chartArea?: { fillColor?: string; borderVisible?: boolean };
+    plotArea?: { fillColor?: string };
+    legend?: { visible: boolean; position?: string; fontSize?: number; fontColor?: string };
+    title?: { text?: string; visible?: boolean; fontSize?: number; fontColor?: string };
+    width?: number;
+    height?: number;
+  }
+): Promise<string> {
+  const excelRunning = await isExcelRunningLive();
+  if (!excelRunning) {
+    throw new Error(ERROR_MESSAGES.EXCEL_NOT_RUNNING);
+  }
+  const fileOpen = await isFileOpenInExcelLive(filePath);
+  if (!fileOpen) {
+    throw new Error(ERROR_MESSAGES.EXCEL_NOT_RUNNING);
+  }
+
+  await styleChartLive(filePath, sheetName, chartIndex, chartName, config);
+
+  return JSON.stringify({
+    success: true,
+    message: `Chart styled on sheet "${sheetName}"`,
+    chartIndex,
+    chartName,
+    method: 'live',
+    note: 'Chart styling applied via COM. Changes visible immediately in Excel.',
   }, null, 2);
 }
