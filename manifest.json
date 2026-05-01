@@ -22,11 +22,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/sbraind/Experimentos"
+    "url": "https://github.com/emilio-S03/Excel-MCP-Server"
   },
-  "homepage": "https://github.com/sbraind/Experimentos/tree/main/excel-mcp-server",
-  "documentation": "https://github.com/sbraind/Experimentos/blob/main/excel-mcp-server/README.md",
-  "support": "https://github.com/sbraind/Experimentos/issues",
+  "homepage": "https://github.com/emilio-S03/Excel-MCP-Server",
+  "documentation": "https://github.com/emilio-S03/Excel-MCP-Server/blob/main/README.md",
+  "support": "https://github.com/emilio-S03/Excel-MCP-Server/issues",
   "icon": "icon.png",
   "server": {
     "type": "node",

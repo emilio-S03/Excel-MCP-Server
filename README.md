@@ -10,7 +10,7 @@ A Model Context Protocol (MCP) server that turns **Claude Desktop and Claude Cod
 
 > **Attribution & fork history**
 >
-> This is a fork and substantial extension of the original Excel MCP Server by **[sbraind](https://github.com/sbraind/Experimentos)** (MIT licensed). The original 34-tool server provided the foundation: ExcelJS file mode, the live-editing dispatcher, the PowerShell COM bridge, and many of the chart/pivot/VBA tools.
+> This is a fork and substantial extension of the original Excel MCP Server by **[sbraind](https://github.com/sbraind/excel-mcp-server)** (MIT licensed via package.json + README badge). The original 34-tool server provided the foundation: ExcelJS file mode, the live-editing dispatcher, the PowerShell COM bridge, and many of the chart/pivot/VBA tools.
 >
 > This v3.x fork (maintained by [@emilio-S03](https://github.com/emilio-S03) for Soracom internal use) adds 62 new tools, sandboxed file access, env-var-based config that actually works in both Claude Desktop and Claude Code, a unified test/CI harness, friendly Mac platform-error messages, and full coworker onboarding docs. See [LICENSE](LICENSE) for the joint copyright.
 
@@ -904,7 +904,7 @@ When reading large datasets, the markdown format automatically shows a preview o
 
 - **This fork (v3.x)**: [github.com/emilio-S03/Excel-MCP-Server](https://github.com/emilio-S03/Excel-MCP-Server)
 - **Issues & bug reports** (this fork): [GitHub Issues](https://github.com/emilio-S03/Excel-MCP-Server/issues)
-- **Original upstream**: [github.com/sbraind/Experimentos](https://github.com/sbraind/Experimentos) (the source this fork extends — credit to sbraind)
+- **Original upstream**: [github.com/sbraind/excel-mcp-server](https://github.com/sbraind/excel-mcp-server) (the source this fork extends — credit to sbraind)
 - **Model Context Protocol**: [modelcontextprotocol.io](https://modelcontextprotocol.io/)
 - **Claude Desktop**: [claude.ai/download](https://claude.ai/download)
 - **ExcelJS Documentation**: [github.com/exceljs/exceljs](https://github.com/exceljs/exceljs)

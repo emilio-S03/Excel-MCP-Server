@@ -1,7 +1,7 @@
-# Draft GitHub Issue for sbraind/Experimentos
+# Draft GitHub Issue for sbraind/excel-mcp-server
 
 Copy/paste the body below into a new issue at:
-**https://github.com/sbraind/Experimentos/issues/new**
+**https://github.com/sbraind/excel-mcp-server/issues/new**
 
 Suggested title:
 
@@ -14,11 +14,11 @@ Suggested body:
 ```
 Hi sbraind 👋
 
-Thank you for building the Excel MCP Server in this repo — your foundation
-(ExcelJS file mode + the live-editing dispatcher + the PowerShell COM bridge
-+ many of the chart/pivot/VBA tools) made it possible for me to build a
-v3.x cross-platform fork I'm now sharing with my team at Soracom for
-internal Claude Desktop / Claude Code use:
+Thank you for building the Excel MCP Server — your foundation (ExcelJS file
+mode + the live-editing dispatcher + the PowerShell COM bridge + many of the
+chart/pivot/VBA tools) made it possible for me to build a v3.x cross-platform
+fork I'm now sharing with my team at Soracom for internal Claude Desktop /
+Claude Code use:
 
 → https://github.com/emilio-S03/Excel-MCP-Server
 
@@ -28,8 +28,8 @@ copyright LICENSE file to my fork.
 
 While preparing the fork, I noticed your repo declares the license as MIT
 in two places — the badge in README.md and `"license": "MIT"` in
-excel-mcp-server/package.json — but doesn't currently include an actual
-LICENSE file at the repo root or inside excel-mcp-server/.
+package.json — but doesn't currently include an actual LICENSE file at the
+repo root.
 
 Would you mind adding a standard MIT LICENSE file with your copyright? It
 would make the license grant unambiguous for anyone forking, packaging
