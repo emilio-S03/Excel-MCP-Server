@@ -1,62 +1,56 @@
 # What can I actually do with this?
 
-Five prompts that beat both **Claude.ai-native Excel handling** (file-attached chat) and **Microsoft Copilot in Excel**.
+Five prompts that exercise capabilities the native "Claude for Excel" add-in does not have. (For one-workbook tasks like "explain this formula" or "add a pivot to this sheet I'm staring at," the native add-in is the better tool. Use both.)
 
 ## 1. Reconcile two workbooks
 
-> Reconcile `Q1-forecast.xlsx` against `Q1-actuals.xlsx` in my Downloads folder. New tab in actuals showing variance % per line, red-fill anything off by more than 10%.
+> Reconcile `Q1-forecast.xlsx` against `Q1-actuals.xlsx` in my Downloads folder. New tab in actuals showing variance per line, red-fill anything off by more than 10%.
 
-**You get:** A populated variance tab in the actuals file, conditionally formatted, saved to disk. No download/re-upload.
+What you get: a populated variance tab in the actuals file, conditionally formatted, saved to disk. No download or re-upload.
 
-**Why Claude.ai-native can't:** It can't reach two files on your filesystem. You'd upload both, get text back, manually paste into Excel.
-
-**Why Microsoft Copilot can't:** Copilot operates inside one open workbook. It can't open a sibling file from your disk and write into it.
+Why the native add-in can't: it operates inside one open workbook only. It cannot open a second file from your filesystem.
 
 ## 2. Multi-file rollup
 
-> Loop every `.xlsx` in `~/customers/2026/` and pull the 'MRR' cell from the Summary tab into one consolidated sheet with filename + value, then save to `mrr-rollup.xlsx`.
+> Loop every `.xlsx` in `~/customers/2026/` and pull the 'MRR' cell from the Summary tab into one consolidated sheet with filename plus value. Save to `mrr-rollup.xlsx`.
 
-**You get:** One workbook, one row per customer, done in seconds.
+What you get: one workbook, one row per customer file, done in seconds.
 
-**Why competitors can't:** Both are single-file by design. No filesystem walks, no batch reads.
+Why the native add-in can't: no filesystem access. It cannot walk a folder.
 
-## 3. Live edit while you watch
+## 3. CSV consolidation with formatting
 
-> I'm staring at this sheet in Excel right now. Add a column chart of column D vs F on the active selection, title it "Revenue vs Spend", and put it next to the data.
+> Take all the CSVs in `~/Downloads/may-exports/` and combine them into one .xlsx with a tab per file. Format each tab as a proper table: freeze headers, currency-format columns C-E, Segoe UI 10pt body. Save next to the originals.
 
-**You get:** The chart appears in the open workbook while you watch. (Windows: native COM chart; Mac: file-mode write — close + reopen to see, or use the styling on a chart you already inserted.)
+What you get: a clean multi-tab .xlsx assembled from the source CSVs, written to your folder.
 
-**Why competitors can't:** Claude.ai-native has no live Excel link — output is a download. Copilot can chart, but only via its own UI flow, not from natural language with surrounding context (other tabs, other files).
+Why the native add-in can't: same reason — no filesystem reach beyond the open workbook.
 
-## 4. CSV cleanup with formatting
+## 4. VBA macro authoring (Windows + VBA Trust enabled)
 
-> Take this CSV export at `~/Downloads/customers-raw.csv`, format it as a proper table (freeze headers, currency-format columns C-E, Segoe UI 10pt body), and save as `customers-clean.xlsx` next to the original.
+> Read the macro in `pricing.xlsm`, explain what it does in plain English, then write a new macro that does the same thing but logs each run to a 'RunLog' sheet with a timestamp.
 
-**You get:** Cleaned `.xlsx` on disk, formatting applied, in the same folder as the source.
+What you get: a plain-English explanation of the existing macro plus a new VBA module installed in the file with the logging behavior.
 
-**Why Claude.ai-native can't:** Returns a downloadable file but no in-place save and loses your folder structure.
+Why the native add-in can't: the native Claude for Excel add-in supports `.xlsm` files but cannot modify or author VBA code. It analyzes the spreadsheet structure and formulas only.
 
-**Why Copilot can't:** Requires manual import into Excel first; can't write to disk on its own.
+## 5. Project-context-driven dashboard
 
-## 5. VBA macro authoring (Windows + VBA Trust enabled)
+> In my Soracom-Reports project, build a Q1 sales dashboard from `q1-data.xlsx` using my project's design rules and the layout in `report-template.xlsx`. Save as `q1-dashboard.xlsx`.
 
-> Read the macro in `pricing.xlsm`, explain what it does in plain English, then write a new macro that does the same thing but logs each run to a 'RunLog' sheet with timestamp.
+What you get: a dashboard styled per your project's CLAUDE.md instructions (colors, fonts, naming conventions), built off your project's template file, saved to disk.
 
-**You get:** Plain-English explanation of the existing macro + a new VBA module installed in the file with the logging behavior.
+Why the native add-in can't: the native add-in has its own separate chat history per Excel session. It does not inherit your Claude Desktop project's CLAUDE.md instructions, knowledge-base files, or persistent memory. This server runs inside the project, so every Excel call sees the full project context.
 
-**Why Claude.ai-native can't:** Can read pasted VBA text, but can't install new code into a `.xlsm` file.
+## Other things this server does well
 
-**Why Copilot can't:** Microsoft Copilot doesn't author or modify VBA — explicit policy.
-
-## Other things this server does well that nothing else does
-
-- **Find and replace across an entire workbook** with regex + dry-run preview.
-- **Pagination on huge sheets** so you can ask Claude to "page through the next 500 rows" without hitting context limits.
-- **Sandbox enforcement** — server refuses to read or write outside the folders you allow, so you can hand it to coworkers without worrying about accidental access to system files.
-- **Friendly capability probe** — `excel_check_environment` tells you what works on your machine before you waste time on a tool that needs something not installed.
+- Find and replace across an entire workbook with regex and dry-run preview.
+- Pagination on huge sheets so you can page through hundreds of thousands of rows without blowing past context limits.
+- Sandboxed file access — the server refuses to read or write outside the folders you allow, so you can hand it to coworkers without worrying about accidental access to system files.
+- Capability probe (`excel_check_environment`) tells you what works on your machine before you waste a turn on a tool that needs something not installed (Excel running, VBA Trust enabled, Mac Automation permission, etc.).
 
 ## Try this prompt template when you're stuck
 
-> Run `excel_check_environment` first. Then, given what's available, [your goal]. If anything is missing or unsupported, tell me what would need to be installed/enabled.
+> Run `excel_check_environment` first. Then, given what's available, [your goal]. If anything is missing or unsupported, tell me what would need to be installed or enabled.
 
-Pinning the capability check at the start of a session means Claude won't waste a turn discovering "oh, VBA trust isn't enabled" mid-task.
+Pinning the capability check at the start of a session means Claude won't waste a turn discovering mid-task that VBA trust isn't enabled.

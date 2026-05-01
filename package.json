@@ -1,7 +1,7 @@
 {
   "name": "excel-mcp-pro",
   "version": "3.2.0",
-  "description": "MCP Server for Excel file operations with 96 tools using ExcelJS + native Excel automation",
+  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 96 tools, cross-platform.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

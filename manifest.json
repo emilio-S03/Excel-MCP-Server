@@ -3,7 +3,7 @@
   "name": "excel-mcp-server",
   "version": "3.2.0",
   "display_name": "Excel MCP Server",
-  "description": "MCP Server for Excel file operations with 96 tools using ExcelJS + native Excel automation",
+  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 96 tools, cross-platform.",
   "long_description": "A powerful Model Context Protocol (MCP) server for working with Excel files. Provides comprehensive tools for reading, writing, formatting, analyzing Excel spreadsheets, creating charts, pivot tables, conditional formatting, and much more. Built with TypeScript and ExcelJS for maximum reliability and type safety.",
   "author": {
     "name": "Excel MCP Server Team"

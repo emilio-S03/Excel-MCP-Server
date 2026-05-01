@@ -6,81 +6,51 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 [![Node](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-A Model Context Protocol (MCP) server that turns **Claude Desktop and Claude Code** into a full-power Excel co-pilot — **96 tools** for reading, writing, formatting, charting, auditing, and live-editing Excel workbooks across **Windows + macOS + Linux**.
+An MCP server that gives Claude Desktop (and Claude Code) the ability to operate Excel files **across folders, across workbooks, and inside your Claude project's full context** — for the work the in-Excel "Claude for Excel" add-in cannot do.
 
 > **Attribution & fork history**
 >
-> This is a fork and substantial extension of the original Excel MCP Server by **[sbraind](https://github.com/sbraind/excel-mcp-server)** (MIT licensed via package.json + README badge). The original 34-tool server provided the foundation: ExcelJS file mode, the live-editing dispatcher, the PowerShell COM bridge, and many of the chart/pivot/VBA tools.
+> This is a fork and substantial extension of the original Excel MCP Server by **[sbraind](https://github.com/sbraind/excel-mcp-server)** (MIT licensed via package.json + README badge + "Fork the repository" invitation in their Contributing section). The original server provided the foundation: ExcelJS file mode, the live-editing dispatcher, the PowerShell COM bridge, and many of the chart/pivot/VBA tools.
 >
-> This v3.x fork (maintained by [@emilio-S03](https://github.com/emilio-S03) for Soracom internal use) adds 62 new tools, sandboxed file access, env-var-based config that actually works in both Claude Desktop and Claude Code, a unified test/CI harness, friendly Mac platform-error messages, and full coworker onboarding docs. See [LICENSE](LICENSE) for the joint copyright.
+> This v3.x fork (maintained by [@emilio-S03](https://github.com/emilio-S03) for Soracom internal use) adds sandboxed file access, env-var-based config that actually works in both Claude Desktop and Claude Code, a unified test/CI harness, friendly Mac platform-error messages, ~50 additional tools, and full coworker onboarding docs. See [LICENSE](LICENSE) for the joint copyright.
 
 ---
 
-## Why this beats "Claude in Excel" (the native extension)
+## When to use this vs. the native "Claude for Excel" add-in
 
-Microsoft and Anthropic both ship in-Excel AI assistants — Microsoft Copilot's "Ask Copilot" pane and the new "Claude in Excel" extension. They're useful for one-off questions inside a single open workbook. **They are not what this server is for.**
+Anthropic ships a "Claude for Excel" add-in that lives inside the Excel sidebar. It's genuinely capable: it has Skills, Connectors, conditional formatting, pivot tables, charts, scenario testing, formula auditing, cross-tab navigation with citations, and shared context across Excel and PowerPoint. **For most one-workbook tasks, the native add-in is the right tool.**
 
-The native extension is **stateless and single-file**. This MCP server gives Claude an **excel hands** that operates inside your Claude project — with all your project's persistent context, instructions, and memory.
+This MCP server is for the four things the native add-in cannot do:
 
-| What you want to do | Claude in Excel (extension) | This MCP server |
+| Task | Native "Claude for Excel" add-in | This MCP server |
 |---|---|---|
-| Run a one-off "what's the total of column C?" inside one open workbook | ✅ works fine | ✅ works |
-| Loop every `.xlsx` in `~/customers/2026/` and pull the MRR cell into a rollup | ❌ no filesystem access — single file only | ✅ direct disk access |
-| Reconcile `forecast.xlsx` against `actuals.xlsx` and red-fill variances >10% | ❌ can't open a sibling file | ✅ multi-file ops |
-| Use your **CLAUDE.md project instructions** ("always format currency as JPY, always use Soracom navy #1E3247") for every Excel task you do | ❌ extension has no project context | ✅ project-scoped Claude Code or Claude Desktop project — full context, every turn |
-| Reference a **knowledge base file** (PDF, customer list, internal policy doc) while editing the workbook | ❌ extension can't reach your KBs | ✅ KB files live in the same project — always available |
-| **Persistent memory** across sessions ("remember our reporting style", "don't auto-add a Total row") | ❌ extension forgets after you close it | ✅ Claude project memory survives sessions |
-| Author and install a **VBA macro** in a `.xlsm` file (Windows + VBA Trust enabled) | ❌ Microsoft Copilot explicitly refuses VBA generation | ✅ `excel_run_vba_macro`, `excel_set_vba_code` |
-| Read existing **conditional formatting rules** to replicate them in another workbook | ❌ extension can't introspect | ✅ `excel_get_conditional_formats` |
-| Generate **modern charts** (waterfall, treemap, sunburst, combo with secondary axis) and live-style them | ❌ extension uses Excel UI flow only | ✅ `excel_create_modern_chart`, `excel_create_combo_chart`, `excel_style_chart` |
-| Audit a workbook for **formula errors, circular refs, complexity** | ❌ no | ✅ `excel_find_formula_errors`, `excel_find_circular_references`, `excel_workbook_stats` |
-| Convert 12 raw CSVs into one tabbed workbook with consistent formatting, save to disk | ❌ no — extension can't write to disk | ✅ `excel_csv_import` + format tools |
-| **Page setup, print area, headers/footers, export to PDF** | ❌ extension can't drive print | ✅ `excel_set_page_setup`, `excel_export_pdf` |
-| Operate at the speed of natural language across **dozens of tabs and thousands of cells** without copy-pasting | ❌ extension is conversational, not scriptable | ✅ tools chain in one prompt |
+| Editing or analyzing the **single workbook open in Excel** in front of you | Best tool. Use it. | Works, but no advantage over native. |
+| **Multi-file or multi-workbook** operations (loop a folder, reconcile two files, batch edits across many .xlsx) | Cannot reach beyond the open workbook | Direct filesystem access |
+| **Authoring or modifying VBA macros** in a `.xlsm` file (Windows + VBA Trust required) | Cannot modify VBA — analyzes only | `excel_run_vba_macro`, `excel_set_vba_code`, `excel_get_vba_code` |
+| Operating with your **Claude project's full context** (CLAUDE.md instructions, knowledge-base files, persistent memory, other MCP servers you've installed) | Has its own separate chat history; doesn't inherit Claude Desktop project context | Runs inside your Claude project — every Excel action sees your project's instructions, KBs, and memory |
 
-### The deeper reason: **MCP server = your AI's hands; project context = its brain**
+If your Excel work is "open this file, help me debug formulas" — use the native add-in.
+If your Excel work is "loop these 14 customer files and consolidate the MRR column into a report formatted to my project's design rules" — use this server.
 
-The "Claude in Excel" extension is a **chat window inside one application**. It has zero awareness of:
-- Your CLAUDE.md project instructions
-- Other files in your project (PDFs, datasets, code, design specs)
-- Your past Claude conversations and saved memories
-- Your file system, other workbooks, downloaded reports
-- Custom skills, tools, or other MCP servers you've installed
-
-This MCP server runs **inside your Claude Code or Claude Desktop project**, which means **every Excel action benefits from everything else Claude already knows about your work**: design system rules, customer naming conventions, regulatory requirements, the report template you used last quarter, the colors your company brand-guides require. You write the prompt once, and Claude composes Excel work that's already aligned with your context.
-
-**Example difference:**
-
-> "Build me a Q1 sales dashboard"
-
-- **Claude in Excel** → asks you what columns to use, what colors, what chart types.
-- **This MCP server inside your "Soracom-Reports" Claude project** → already knows from your project instructions to use the company palette (`#1E3247` navy + `#00BCD4` cyan), reads `q1-data.xlsx` from your Documents folder, references `report-template.xlsx` from your project files for the layout, applies your standard pivot configuration, exports to PDF, and saves it to the same folder. One prompt. Done.
-
-### When to use which
-
-- Use **Claude in Excel** for quick conversational questions inside one open file you're staring at.
-- Use **this MCP server** for everything else — building, automating, auditing, multi-file workflows, and anything where Claude's project context matters.
-
-The two are complementary, not competing. Most Soracom users will install both.
+Most Soracom power users will install both and learn when to reach for which.
 
 ---
 
 ## What's in v3.2.0
 
-- **96 tools** — read, write, format, charts, pivots, tables, VBA, sparklines, audit, page setup, PDF export, dashboards, find/replace, CSV i/o, image insertion, sheet/row/column visibility, hyperlinks, conditional formats, data validation, named ranges, calculation modes, and more
-- **Sandboxed file access** — defaults to your `Documents`, `Desktop`, `Downloads` folders. Configurable via the extension settings UI in Claude Desktop or the `EXCEL_ALLOWED_DIRS` env var
-- **Capability probe** (`excel_check_environment`) — surfaces missing prerequisites with actionable fixes before tool calls fail with cryptic COM errors
-- **Cross-platform** — most tools work on Windows, macOS, and Linux. The few Win-only tools (live VBA, native chart creation, etc.) throw friendly errors on Mac with Office Scripts alternatives
-- **Live editing** when Excel is open (Windows COM, macOS AppleScript) — watch Claude's changes appear in real time
+- **96 tools** covering reading, writing, formatting, sheet management, charts, pivots, tables, VBA, sparklines, find/replace, CSV import/export, image insertion, sheet/row/column visibility, hyperlinks, conditional formatting, data validation, named ranges, calculation modes, page setup, PDF export, formula auditing, and workbook stats. Run `excel_check_environment` after install to see what works on your machine.
+- **Sandboxed file access** — defaults to your `Documents`, `Desktop`, `Downloads` folders. Configurable via the extension settings UI in Claude Desktop or the `EXCEL_ALLOWED_DIRS` env var.
+- **Capability probe** (`excel_check_environment`) — structured report on Excel install state, VBA Trust state (Windows), Automation permission state (Mac), and which tool categories are usable on this machine right now.
+- **Cross-platform** — most tools work on Windows, macOS, and Linux. The few Windows-only tools (live VBA, native COM chart creation) throw friendly platform errors on Mac with alternatives.
+- **Live editing** when Excel is open (Windows COM, macOS AppleScript) — Claude's changes appear in real time.
 
-**Perfect for:**
-- 📊 Automated multi-workbook data analysis and reporting
-- 📈 Business intelligence + dashboard generation with brand-consistent styling
-- 🔄 Cross-file ETL — loop folders of customer/product/report .xlsx files
-- 📝 Template-driven report generation with project-scoped style rules
-- 🎨 Batch formatting + design system enforcement
-- 🔍 Workbook auditing — find formula errors, circular refs, complexity hotspots
-- 🤖 VBA macro authoring + installation (Windows)
+**Built for:**
+- Multi-workbook data analysis and report consolidation
+- Cross-file ETL — loop folders of customer/product/report .xlsx files
+- Template-driven report generation with project-scoped style rules
+- Workbook auditing — formula errors, circular refs, complexity hotspots
+- VBA macro authoring and installation (Windows)
+- Anything else that requires reaching outside a single open workbook
 
 ## Installation
 
@@ -912,7 +882,7 @@ When reading large datasets, the markdown format automatically shows a preview o
 ## Coworker docs (read these first)
 
 - **[docs/INSTALL.md](docs/INSTALL.md)** — full install funnel, Mac + Windows
-- **[docs/EXAMPLES.md](docs/EXAMPLES.md)** — 5 prompts that beat Claude in Excel + Microsoft Copilot
+- **[docs/EXAMPLES.md](docs/EXAMPLES.md)** — 5 prompts that exercise capabilities the native Claude for Excel add-in does not have
 - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — common errors with actionable fixes
 - **[docs/PLATFORM_PARITY.md](docs/PLATFORM_PARITY.md)** — full Windows / macOS / Linux tool matrix
 - **[docs/EXCEL_FOR_WEB.md](docs/EXCEL_FOR_WEB.md)** — what works for browser-only Excel users
