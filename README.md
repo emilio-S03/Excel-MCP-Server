@@ -1,35 +1,86 @@
-# Excel MCP Server
+# Excel MCP Server (v3.x — Soracom internal fork)
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Server-green)](https://modelcontextprotocol.io/)
 [![ExcelJS](https://img.shields.io/badge/ExcelJS-4.4+-217346)](https://github.com/exceljs/exceljs)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 [![Node](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-A powerful Model Context Protocol (MCP) server that enables AI assistants like Claude to work seamlessly with Excel files. Built with TypeScript, ExcelJS, and the official MCP SDK.
+A Model Context Protocol (MCP) server that turns **Claude Desktop and Claude Code** into a full-power Excel co-pilot — **96 tools** for reading, writing, formatting, charting, auditing, and live-editing Excel workbooks across **Windows + macOS + Linux**.
 
-## About
+> **Attribution & fork history**
+>
+> This is a fork and substantial extension of the original Excel MCP Server by **[sbraind](https://github.com/sbraind/Experimentos)** (MIT licensed). The original 34-tool server provided the foundation: ExcelJS file mode, the live-editing dispatcher, the PowerShell COM bridge, and many of the chart/pivot/VBA tools.
+>
+> This v3.x fork (maintained by [@emilio-S03](https://github.com/emilio-S03) for Soracom internal use) adds 62 new tools, sandboxed file access, env-var-based config that actually works in both Claude Desktop and Claude Code, a unified test/CI harness, friendly Mac platform-error messages, and full coworker onboarding docs. See [LICENSE](LICENSE) for the joint copyright.
 
-This MCP server provides **34 comprehensive tools** for Excel file manipulation, allowing Claude Desktop and other MCP clients to read, write, format, analyze, and transform Excel spreadsheets programmatically. Whether you need to extract data, create reports, apply complex formatting, or generate pivot tables and charts, this server has you covered.
+---
+
+## Why this beats "Claude in Excel" (the native extension)
+
+Microsoft and Anthropic both ship in-Excel AI assistants — Microsoft Copilot's "Ask Copilot" pane and the new "Claude in Excel" extension. They're useful for one-off questions inside a single open workbook. **They are not what this server is for.**
+
+The native extension is **stateless and single-file**. This MCP server gives Claude an **excel hands** that operates inside your Claude project — with all your project's persistent context, instructions, and memory.
+
+| What you want to do | Claude in Excel (extension) | This MCP server |
+|---|---|---|
+| Run a one-off "what's the total of column C?" inside one open workbook | ✅ works fine | ✅ works |
+| Loop every `.xlsx` in `~/customers/2026/` and pull the MRR cell into a rollup | ❌ no filesystem access — single file only | ✅ direct disk access |
+| Reconcile `forecast.xlsx` against `actuals.xlsx` and red-fill variances >10% | ❌ can't open a sibling file | ✅ multi-file ops |
+| Use your **CLAUDE.md project instructions** ("always format currency as JPY, always use Soracom navy #1E3247") for every Excel task you do | ❌ extension has no project context | ✅ project-scoped Claude Code or Claude Desktop project — full context, every turn |
+| Reference a **knowledge base file** (PDF, customer list, internal policy doc) while editing the workbook | ❌ extension can't reach your KBs | ✅ KB files live in the same project — always available |
+| **Persistent memory** across sessions ("remember our reporting style", "don't auto-add a Total row") | ❌ extension forgets after you close it | ✅ Claude project memory survives sessions |
+| Author and install a **VBA macro** in a `.xlsm` file (Windows + VBA Trust enabled) | ❌ Microsoft Copilot explicitly refuses VBA generation | ✅ `excel_run_vba_macro`, `excel_set_vba_code` |
+| Read existing **conditional formatting rules** to replicate them in another workbook | ❌ extension can't introspect | ✅ `excel_get_conditional_formats` |
+| Generate **modern charts** (waterfall, treemap, sunburst, combo with secondary axis) and live-style them | ❌ extension uses Excel UI flow only | ✅ `excel_create_modern_chart`, `excel_create_combo_chart`, `excel_style_chart` |
+| Audit a workbook for **formula errors, circular refs, complexity** | ❌ no | ✅ `excel_find_formula_errors`, `excel_find_circular_references`, `excel_workbook_stats` |
+| Convert 12 raw CSVs into one tabbed workbook with consistent formatting, save to disk | ❌ no — extension can't write to disk | ✅ `excel_csv_import` + format tools |
+| **Page setup, print area, headers/footers, export to PDF** | ❌ extension can't drive print | ✅ `excel_set_page_setup`, `excel_export_pdf` |
+| Operate at the speed of natural language across **dozens of tabs and thousands of cells** without copy-pasting | ❌ extension is conversational, not scriptable | ✅ tools chain in one prompt |
+
+### The deeper reason: **MCP server = your AI's hands; project context = its brain**
+
+The "Claude in Excel" extension is a **chat window inside one application**. It has zero awareness of:
+- Your CLAUDE.md project instructions
+- Other files in your project (PDFs, datasets, code, design specs)
+- Your past Claude conversations and saved memories
+- Your file system, other workbooks, downloaded reports
+- Custom skills, tools, or other MCP servers you've installed
+
+This MCP server runs **inside your Claude Code or Claude Desktop project**, which means **every Excel action benefits from everything else Claude already knows about your work**: design system rules, customer naming conventions, regulatory requirements, the report template you used last quarter, the colors your company brand-guides require. You write the prompt once, and Claude composes Excel work that's already aligned with your context.
+
+**Example difference:**
+
+> "Build me a Q1 sales dashboard"
+
+- **Claude in Excel** → asks you what columns to use, what colors, what chart types.
+- **This MCP server inside your "Soracom-Reports" Claude project** → already knows from your project instructions to use the company palette (`#1E3247` navy + `#00BCD4` cyan), reads `q1-data.xlsx` from your Documents folder, references `report-template.xlsx` from your project files for the layout, applies your standard pivot configuration, exports to PDF, and saves it to the same folder. One prompt. Done.
+
+### When to use which
+
+- Use **Claude in Excel** for quick conversational questions inside one open file you're staring at.
+- Use **this MCP server** for everything else — building, automating, auditing, multi-file workflows, and anything where Claude's project context matters.
+
+The two are complementary, not competing. Most Soracom users will install both.
+
+---
+
+## What's in v3.2.0
+
+- **96 tools** — read, write, format, charts, pivots, tables, VBA, sparklines, audit, page setup, PDF export, dashboards, find/replace, CSV i/o, image insertion, sheet/row/column visibility, hyperlinks, conditional formats, data validation, named ranges, calculation modes, and more
+- **Sandboxed file access** — defaults to your `Documents`, `Desktop`, `Downloads` folders. Configurable via the extension settings UI in Claude Desktop or the `EXCEL_ALLOWED_DIRS` env var
+- **Capability probe** (`excel_check_environment`) — surfaces missing prerequisites with actionable fixes before tool calls fail with cryptic COM errors
+- **Cross-platform** — most tools work on Windows, macOS, and Linux. The few Win-only tools (live VBA, native chart creation, etc.) throw friendly errors on Mac with Office Scripts alternatives
+- **Live editing** when Excel is open (Windows COM, macOS AppleScript) — watch Claude's changes appear in real time
 
 **Perfect for:**
-- 📊 Automated data analysis and reporting
-- 📈 Business intelligence workflows
-- 🔄 Data transformation and ETL processes
-- 📝 Report generation from templates
-- 🎨 Batch formatting and styling
-
-## Features
-
-- **34 comprehensive tools** for Excel manipulation
-- **✨ Real-time Live Editing** - See changes instantly in Excel (macOS with Microsoft Excel)
-- Full support for reading, writing, formatting, and analyzing Excel files
-- **NEW**: Charts, Pivot Tables, Excel Tables, and Conditional Formatting
-- Built with the official MCP SDK
-- Type-safe with TypeScript and Zod validation
-- Preserves formatting when modifying files
-- Optional backup creation before modifications
-- Supports both JSON and Markdown response formats
+- 📊 Automated multi-workbook data analysis and reporting
+- 📈 Business intelligence + dashboard generation with brand-consistent styling
+- 🔄 Cross-file ETL — loop folders of customer/product/report .xlsx files
+- 📝 Template-driven report generation with project-scoped style rules
+- 🎨 Batch formatting + design system enforcement
+- 🔍 Workbook auditing — find formula errors, circular refs, complexity hotspots
+- 🤖 VBA macro authoring + installation (Windows)
 
 ## Installation
 
@@ -37,7 +88,7 @@ This MCP server provides **34 comprehensive tools** for Excel file manipulation,
 
 The easiest way to install this server is using the pre-built MCPB bundle:
 
-1. **Download** the latest `excel-mcp-server.mcpb` file from the [releases page](https://github.com/sbraind/excel-mcp-server/releases)
+1. **Download** the latest `excel-mcp-server-3.2.0.mcpb` file from the [releases page](https://github.com/emilio-S03/Excel-MCP-Server/releases)
 2. **Double-click** the `.mcpb` file, or:
    - Open Claude Desktop
    - Go to **Settings** → **Extensions** → **Advanced Settings**
@@ -59,8 +110,8 @@ If you prefer to build from source:
 #### Step 1: Clone and build the project
 
 ```bash
-git clone https://github.com/sbraind/excel-mcp-server.git
-cd excel-mcp-server
+git clone https://github.com/emilio-S03/Excel-MCP-Server.git
+cd Excel-MCP-Server
 npm install
 npm run build
 ```
@@ -851,15 +902,25 @@ When reading large datasets, the markdown format automatically shows a preview o
 
 ## Links & Resources
 
-- **Repository**: [github.com/sbraind/excel-mcp-server](https://github.com/sbraind/excel-mcp-server)
-- **Issues & Bug Reports**: [GitHub Issues](https://github.com/sbraind/excel-mcp-server/issues)
+- **This fork (v3.x)**: [github.com/emilio-S03/Excel-MCP-Server](https://github.com/emilio-S03/Excel-MCP-Server)
+- **Issues & bug reports** (this fork): [GitHub Issues](https://github.com/emilio-S03/Excel-MCP-Server/issues)
+- **Original upstream**: [github.com/sbraind/Experimentos](https://github.com/sbraind/Experimentos) (the source this fork extends — credit to sbraind)
 - **Model Context Protocol**: [modelcontextprotocol.io](https://modelcontextprotocol.io/)
-- **Claude Desktop**: [claude.ai](https://claude.ai/)
+- **Claude Desktop**: [claude.ai/download](https://claude.ai/download)
 - **ExcelJS Documentation**: [github.com/exceljs/exceljs](https://github.com/exceljs/exceljs)
+
+## Coworker docs (read these first)
+
+- **[docs/INSTALL.md](docs/INSTALL.md)** — full install funnel, Mac + Windows
+- **[docs/EXAMPLES.md](docs/EXAMPLES.md)** — 5 prompts that beat Claude in Excel + Microsoft Copilot
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — common errors with actionable fixes
+- **[docs/PLATFORM_PARITY.md](docs/PLATFORM_PARITY.md)** — full Windows / macOS / Linux tool matrix
+- **[docs/EXCEL_FOR_WEB.md](docs/EXCEL_FOR_WEB.md)** — what works for browser-only Excel users
+- **[docs/MAC_VERIFICATION_NEEDED.md](docs/MAC_VERIFICATION_NEEDED.md)** — Mac coworkers please read
 
 ## License
 
-MIT - See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE). Joint copyright: original work © sbraind, v3.x fork © Emilio Soria.
 
 ## Contributing
 
@@ -877,9 +938,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 If you encounter any issues or have questions:
 
-1. Check the [Installation Guide](INSTALLATION.md) for common setup issues
-2. Review [existing issues](https://github.com/sbraind/excel-mcp-server/issues) to see if your problem has been addressed
-3. Open a [new issue](https://github.com/sbraind/excel-mcp-server/issues/new) with detailed information about your problem
+1. Check the [Installation Guide](docs/INSTALL.md) and [Troubleshooting](docs/TROUBLESHOOTING.md) for common setup issues
+2. Review [existing issues](https://github.com/emilio-S03/Excel-MCP-Server/issues) to see if your problem has been addressed
+3. Open a [new issue](https://github.com/emilio-S03/Excel-MCP-Server/issues/new) with detailed information about your problem
 
 ---
 

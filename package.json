@@ -35,17 +35,20 @@
     "conditional-formatting"
   ],
   "author": {
-    "name": "Excel MCP Server Team"
+    "name": "Emilio Soria",
+    "email": "emilio@soracom.io"
   },
+  "contributors": [
+    { "name": "sbraind", "url": "https://github.com/sbraind/Experimentos", "comment": "Original author of the upstream Excel MCP Server (v1.x/v2.x foundation)" }
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sbraind/Experimentos.git",
-    "directory": "excel-mcp-server"
+    "url": "https://github.com/emilio-S03/Excel-MCP-Server.git"
   },
-  "homepage": "https://github.com/sbraind/Experimentos/tree/main/excel-mcp-server",
+  "homepage": "https://github.com/emilio-S03/Excel-MCP-Server",
   "bugs": {
-    "url": "https://github.com/sbraind/Experimentos/issues"
+    "url": "https://github.com/emilio-S03/Excel-MCP-Server/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
