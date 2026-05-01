@@ -1,5 +1,5 @@
 {
-  "name": "excel-mcp",
+  "name": "excel-mcp-pro",
   "version": "3.2.0",
   "description": "MCP Server for Excel file operations with 96 tools using ExcelJS + native Excel automation",
   "type": "module",
