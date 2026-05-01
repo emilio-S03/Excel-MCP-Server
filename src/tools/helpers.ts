@@ -1,18 +1,79 @@
 import ExcelJS from 'exceljs';
 import { promises as fs } from 'fs';
 import { resolve, dirname } from 'path';
+import { homedir } from 'os';
 import { ERROR_MESSAGES } from '../constants.js';
 import type { CellValue } from 'exceljs';
 
-// Get user config from index.ts
+// ----------------------------------------------------------------------------
+// User configuration (Phase 1 — v3.0.0)
+// Hydrated once at boot from environment variables. The .mcpb spec uses
+// ${user_config.NAME} substitution to inject these into the spawned process.
+// Manual installs (raw claude_desktop_config.json / ~/.claude.json) set the
+// same env vars in their server entry. There is no runtime config channel
+// — Spike B confirmed Claude Desktop and Claude Code don't deliver one.
+// ----------------------------------------------------------------------------
+
+function defaultAllowedDirectories(): string[] {
+  const home = homedir();
+  return [
+    resolve(home, 'Documents'),
+    resolve(home, 'Desktop'),
+    resolve(home, 'Downloads'),
+  ];
+}
+
+function parseDirList(raw: string | undefined): string[] | null {
+  if (!raw) return null;
+  // Accept either OS-specific path separator (':' on POSIX, ';' on win32)
+  // or a JSON array. Trim and drop empties.
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.map(String).map((p) => resolve(p));
+    } catch {
+      // fall through
+    }
+  }
+  const sep = process.platform === 'win32' ? /[;,]/ : /[:;,]/;
+  const parts = trimmed.split(sep).map((s) => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts.map((p) => resolve(p)) : null;
+}
+
 let allowedDirectories: string[] = [];
+let allowedDirectoriesIsDefault = true;
+
+function loadAllowedDirsFromEnv(): void {
+  const fromEnv = parseDirList(process.env.EXCEL_ALLOWED_DIRS);
+  if (fromEnv && fromEnv.length > 0) {
+    allowedDirectories = fromEnv;
+    allowedDirectoriesIsDefault = false;
+  } else {
+    allowedDirectories = defaultAllowedDirectories();
+    allowedDirectoriesIsDefault = true;
+  }
+}
+
+loadAllowedDirsFromEnv();
 
 export function setAllowedDirectories(dirs: string[]) {
-  allowedDirectories = dirs;
+  if (!Array.isArray(dirs) || dirs.length === 0) {
+    allowedDirectories = defaultAllowedDirectories();
+    allowedDirectoriesIsDefault = true;
+    return;
+  }
+  allowedDirectories = dirs.map((d) => resolve(d));
+  allowedDirectoriesIsDefault = false;
+}
+
+export function getAllowedDirectories(): { dirs: string[]; isDefault: boolean } {
+  return { dirs: [...allowedDirectories], isDefault: allowedDirectoriesIsDefault };
 }
 
 export function ensureFilePathAllowed(filePath: string): void {
-  // If no directories are configured, allow all paths
+  // Empty allow-list should never happen now (defaults always populate),
+  // but keep the safety check in case future code clears it.
   if (!allowedDirectories || allowedDirectories.length === 0) {
     return;
   }
@@ -20,16 +81,25 @@ export function ensureFilePathAllowed(filePath: string): void {
   const absolutePath = resolve(filePath);
   const pathDir = dirname(absolutePath);
 
-  // Check if the file path is within any of the allowed directories
-  const isAllowed = allowedDirectories.some(allowedDir => {
+  const isAllowed = allowedDirectories.some((allowedDir) => {
     const absoluteAllowedDir = resolve(allowedDir);
-    return absolutePath.startsWith(absoluteAllowedDir) || pathDir.startsWith(absoluteAllowedDir);
+    return (
+      absolutePath === absoluteAllowedDir ||
+      absolutePath.startsWith(absoluteAllowedDir + (process.platform === 'win32' ? '\\' : '/')) ||
+      pathDir === absoluteAllowedDir ||
+      pathDir.startsWith(absoluteAllowedDir + (process.platform === 'win32' ? '\\' : '/'))
+    );
   });
 
   if (!isAllowed) {
-    throw new Error(
-      `Access denied: File path "${filePath}" is not within allowed directories. Allowed directories: ${allowedDirectories.join(', ')}`
+    const err = new Error(
+      `PATH_OUTSIDE_ALLOWED: "${filePath}" is not within an allowed directory. ` +
+      `Allowed: ${allowedDirectories.join(', ')}. ` +
+      `To allow more locations, set the EXCEL_ALLOWED_DIRS environment variable in your MCP server config ` +
+      `(e.g., "C:/Users/you/Projects;C:/Data" on Windows, "/Users/you/Projects:/Data" on macOS).`
     );
+    (err as any).code = 'PATH_OUTSIDE_ALLOWED';
+    throw err;
   }
 }
 

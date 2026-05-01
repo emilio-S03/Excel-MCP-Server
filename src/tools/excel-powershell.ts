@@ -7,10 +7,27 @@ import { tmpdir } from 'os';
 const execAsync = promisify(exec);
 
 // Configuration
-const POWERSHELL_TIMEOUT = 10000; // 10 seconds
+const POWERSHELL_TIMEOUT = 30000; // 30 seconds (was 10s — too tight for many real workloads)
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 500; // 500ms
 const MAX_CMD_LENGTH = 8000; // Leave margin below cmd.exe's 8191 limit
+
+// Per-tool timeout overrides — used by long-running operations.
+// Reads/probes use the default; writes/macros/queries get more time.
+export const TOOL_TIMEOUTS = {
+  PROBE: 5000,           // process-running checks, file-open checks
+  READ: 10000,           // simple reads from open Excel
+  WRITE: 30000,          // cell/range writes
+  CHART_CREATE: 45000,   // chart creation can be slow on large data
+  CHART_STYLE: 30000,
+  PIVOT: 60000,          // pivots over large source ranges
+  VBA_MACRO: 60000,      // user macros may legitimately take time
+  VBA_CODE_RW: 30000,    // read/write VBA module text
+  POWER_QUERY: 60000,    // M-language refresh against external data
+  BATCH_FORMAT: 45000,   // many cells in one call
+  SCREENSHOT: 30000,     // off-screen render + save
+  REGISTRY: 8000,        // VBA trust check/set
+} as const;
 
 /**
  * Decode common HTML entities that may be injected by the MCP protocol layer
@@ -1220,7 +1237,7 @@ export async function captureScreenshotViaPowerShell(
   body += `  }\n`;
 
   const script = wrapWithCleanup(preamble, body);
-  await execPowerShellWithRetry(script, MAX_RETRIES, 15000); // longer timeout for screenshot
+  await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.SCREENSHOT);
 }
 
 // ============================================================
@@ -1310,7 +1327,7 @@ try {
 `;
 
   try {
-    return await execPowerShellWithRetry(script, MAX_RETRIES, 30000);
+    return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.VBA_MACRO);
   } catch (error: any) {
     if (error.message && error.message.includes('Programmatic access to Visual Basic Project is not trusted')) {
       throw new Error('VBA access denied. Enable "Trust access to the VBA project object model" in Excel Trust Center settings (File > Options > Trust Center > Trust Center Settings > Macro Settings).');
@@ -1331,7 +1348,7 @@ export async function getVbaCodeViaPowerShell(
   const script = wrapWithCleanup(preamble, body);
 
   try {
-    return await execPowerShellWithRetry(script);
+    return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.VBA_CODE_RW);
   } catch (error: any) {
     if (error.message && (error.message.includes('VBA_TRUST_ERROR') || error.message.includes('trust'))) {
       throw new Error('VBA access denied. Enable "Trust access to the VBA project object model" in Excel Trust Center settings (File > Options > Trust Center > Trust Center Settings > Macro Settings).');
@@ -1384,7 +1401,7 @@ export async function setVbaCodeViaPowerShell(
 
   const script = wrapWithCleanup(preamble, body);
   try {
-    await execPowerShellWithRetry(script);
+    await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.VBA_CODE_RW);
   } catch (error: any) {
     if (error.message && (error.message.includes('VBA_TRUST_ERROR') || error.message.includes('trust'))) {
       throw new Error('VBA access denied. Enable "Trust access to the VBA project object model" in Excel Trust Center settings (File > Options > Trust Center > Trust Center Settings > Macro Settings).');
@@ -1664,7 +1681,7 @@ export async function runPowerQueryViaPowerShell(
   }
 
   const script = wrapWithCleanup(preamble, body);
-  await execPowerShellWithRetry(script, MAX_RETRIES, 30000); // queries may take time
+  await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.POWER_QUERY);
 }
 
 // ============================================================
@@ -1809,7 +1826,7 @@ export async function createChartViaPowerShell(
   body += `  Write-Output "tier=$tier|seriesCount=$sc|rows=$rowCount|cols=$colCount"\n`;
 
   const script = wrapWithCleanup(preamble, body);
-  return await execPowerShellWithRetry(script, MAX_RETRIES, 15000);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.CHART_CREATE);
 }
 
 // ============================================================
@@ -1863,7 +1880,7 @@ export async function createPivotTableViaPowerShell(
   }
 
   const script = wrapWithCleanup(preamble, body);
-  await execPowerShellWithRetry(script, MAX_RETRIES, 15000);
+  await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.PIVOT);
 }
 
 // ============================================================
@@ -2157,7 +2174,7 @@ export async function batchFormatViaPowerShell(
   body += `  $wb.Save()\n`;
 
   const script = wrapWithCleanup(preamble, body);
-  await execPowerShellWithRetry(script, MAX_RETRIES, 30000); // may take time with many ops
+  await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.BATCH_FORMAT);
 }
 
 // ============================================================
@@ -2681,5 +2698,691 @@ export async function styleChartViaPowerShell(
 
   body += `  $wb.Save()\n`;
   const script = wrapWithCleanup(preamble, body);
-  await execPowerShellWithRetry(script, MAX_RETRIES, 15000);
+  await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.CHART_STYLE);
+}
+
+// ============================================================
+// Modern Charts (waterfall / funnel / treemap / sunburst /
+// histogram / box-whisker) and Combo Charts
+// ============================================================
+
+// XlChartType constants — Excel 2016+ for the "modern" set.
+const MODERN_CHART_TYPE_MAP: Record<string, number> = {
+  waterfall: 119,   // xlWaterfall
+  funnel: 123,      // xlFunnel
+  treemap: 117,     // xlTreemap
+  sunburst: 120,    // xlSunburst
+  histogram: 118,   // xlHistogram
+  boxWhisker: 121,  // xlBoxwhisker
+};
+
+const COMBO_SERIES_TYPE_MAP: Record<string, number> = {
+  column: 51,       // xlColumnClustered
+  line: 4,          // xlLine
+};
+
+/**
+ * Build the Tier-1..4 series-binding script that
+ * createChartViaPowerShell uses, parameterized so we can re-use it
+ * for the modern + combo paths. Returns a body fragment that:
+ *   - assumes $chart, $srcRange, $rowCount, $colCount, $tier, $errors are in scope
+ *   - leaves $tier set to a string describing which path bound the data,
+ *     or 'none' if everything failed
+ */
+function buildSeriesBindingTiers(escapedDataRange: string): string {
+  let body = '';
+  // Tier 1: SetSourceData
+  body += `  try {\n`;
+  body += `    $chart.SetSourceData($srcRange)\n`;
+  body += `    if ($chart.SeriesCollection().Count -gt 0) { $tier = 'SetSourceData' }\n`;
+  body += `  } catch {\n`;
+  body += `    $errors += "T1(SetSourceData): $($_.Exception.Message)"\n`;
+  body += `  }\n`;
+  // Tier 2: NewSeries with range refs
+  body += `  if ($tier -eq 'none') {\n`;
+  body += `    try {\n`;
+  body += `      for ($c = 2; $c -le $colCount; $c++) {\n`;
+  body += `        $ns = $chart.SeriesCollection().NewSeries()\n`;
+  body += `        $ns.Values = $srcRange.Columns($c).Offset(1,0).Resize($rowCount - 1, 1)\n`;
+  body += `        $ns.XValues = $srcRange.Columns(1).Offset(1,0).Resize($rowCount - 1, 1)\n`;
+  body += `        $h = $srcRange.Cells(1, $c).Value2\n`;
+  body += `        if ($h) { $ns.Name = [string]$h }\n`;
+  body += `      }\n`;
+  body += `      if ($chart.SeriesCollection().Count -gt 0) { $tier = 'NewSeries-Range' }\n`;
+  body += `    } catch {\n`;
+  body += `      $errors += "T2(NewSeries-Range): $($_.Exception.Message)"\n`;
+  body += `      try { while ($chart.SeriesCollection().Count -gt 0) { $chart.SeriesCollection(1).Delete() } } catch {}\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+  // Tier 3: NewSeries with extracted arrays
+  body += `  if ($tier -eq 'none') {\n`;
+  body += `    try {\n`;
+  body += `      $catNf = $srcRange.Cells(2, 1).NumberFormat\n`;
+  body += `      $isDateCol = ($catNf -match 'd|m|y' -and $catNf -notmatch '#|0|%')\n`;
+  body += `      for ($c = 2; $c -le $colCount; $c++) {\n`;
+  body += `        $ns = $chart.SeriesCollection().NewSeries()\n`;
+  body += `        $vals = @()\n`;
+  body += `        $cats = @()\n`;
+  body += `        for ($r = 2; $r -le $rowCount; $r++) {\n`;
+  body += `          $v = $srcRange.Cells($r, $c).Value2\n`;
+  body += `          if ($v -eq $null) { $v = 0 }\n`;
+  body += `          $vals += [double]$v\n`;
+  body += `          $catCell = $srcRange.Cells($r, 1)\n`;
+  body += `          if ($isDateCol -and $catCell.Value2 -ne $null) {\n`;
+  body += `            $cats += $catCell.Text\n`;
+  body += `          } else {\n`;
+  body += `            $cv = $catCell.Value2\n`;
+  body += `            if ($cv -eq $null) { $cv = '' }\n`;
+  body += `            $cats += [string]$cv\n`;
+  body += `          }\n`;
+  body += `        }\n`;
+  body += `        $ns.Values = $vals\n`;
+  body += `        $ns.XValues = $cats\n`;
+  body += `        $h = $srcRange.Cells(1, $c).Value2\n`;
+  body += `        if ($h) { $ns.Name = [string]$h }\n`;
+  body += `      }\n`;
+  body += `      if ($chart.SeriesCollection().Count -gt 0) { $tier = 'NewSeries-Array' }\n`;
+  body += `    } catch {\n`;
+  body += `      $errors += "T3(NewSeries-Array): $($_.Exception.Message)"\n`;
+  body += `      try { while ($chart.SeriesCollection().Count -gt 0) { $chart.SeriesCollection(1).Delete() } } catch {}\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+  // Tier 4: hardcoded sanity test (proves chart-type itself is the failure)
+  body += `  if ($tier -eq 'none') {\n`;
+  body += `    try {\n`;
+  body += `      $ns = $chart.SeriesCollection().NewSeries()\n`;
+  body += `      $ns.Values = @(1, 2, 3, 4, 5)\n`;
+  body += `      $ns.Name = 'TestSeries'\n`;
+  body += `      if ($chart.SeriesCollection().Count -gt 0) { $tier = 'Hardcoded-Test' }\n`;
+  body += `    } catch {\n`;
+  body += `      $errors += "T4(Hardcoded): $($_.Exception.Message)"\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+  // Final validation
+  body += `  $sc = $chart.SeriesCollection().Count\n`;
+  body += `  if ($sc -eq 0) {\n`;
+  body += `    $errDetail = $errors -join ' | '\n`;
+  body += `    $chartObj.Delete()\n`;
+  body += `    throw "CHART_BIND_FAILED: 0 series after 4 tiers. Range=${escapedDataRange} rows=$rowCount cols=$colCount | $errDetail"\n`;
+  body += `  }\n`;
+  return body;
+}
+
+/**
+ * Create a "modern" Excel 2016+ chart (waterfall, funnel, treemap,
+ * sunburst, histogram, box-whisker) via PowerShell COM.
+ *
+ * These chart types use the same ChartObjects.Add + SetSourceData
+ * shape as classic charts; the difference is just the ChartType
+ * constant. The 4-tier binding fallback is reused so we degrade
+ * gracefully on tricky data ranges.
+ */
+export async function createModernChartViaPowerShell(
+  filePath: string,
+  sheetName: string,
+  chartType: string,
+  dataRange: string,
+  position: string,
+  title?: string,
+  dataSheetName?: string
+): Promise<string> {
+  validateRange(dataRange);
+  validateCellAddress(position);
+  const fileName = basename(filePath);
+
+  const xlChartType = MODERN_CHART_TYPE_MAP[chartType];
+  if (xlChartType === undefined) {
+    throw new Error(
+      `Unsupported modern chart type: ${chartType}. ` +
+      `Expected one of: ${Object.keys(MODERN_CHART_TYPE_MAP).join(', ')}.`
+    );
+  }
+
+  const preamble = buildPreamble(fileName, sheetName);
+  let body = `  $ErrorActionPreference = 'Stop'\n`;
+  body += `  $posCell = $ws.Range('${position}')\n`;
+  body += `  $chartObj = $ws.ChartObjects().Add($posCell.Left, $posCell.Top, 480, 320)\n`;
+  body += `  $chart = $chartObj.Chart\n`;
+  // Set the modern chart type up front so SetSourceData picks the right binding
+  body += `  $chart.ChartType = ${xlChartType}\n`;
+
+  const escapedDataRange = escapePowerShellString(dataRange);
+  if (dataSheetName) {
+    const escapedDataSheet = escapePowerShellString(dataSheetName);
+    body += `  $dataWs = $wb.Worksheets.Item('${escapedDataSheet}')\n`;
+    body += `  $srcRange = $dataWs.Range('${escapedDataRange}')\n`;
+  } else {
+    body += `  $srcRange = $ws.Range('${escapedDataRange}')\n`;
+  }
+  body += `  $rowCount = $srcRange.Rows.Count\n`;
+  body += `  $colCount = $srcRange.Columns.Count\n`;
+  body += `  $tier = 'none'\n`;
+  body += `  $errors = @()\n`;
+
+  body += buildSeriesBindingTiers(escapedDataRange);
+
+  if (title) {
+    const escapedTitle = escapePowerShellString(title);
+    body += `  $chart.HasTitle = $true\n`;
+    body += `  $chart.ChartTitle.Text = '${escapedTitle}'\n`;
+  }
+  // Modern charts (treemap, sunburst, waterfall, etc.) usually look
+  // cleaner without a legend; let downstream excel_style_chart re-enable.
+  body += `  try { $chart.HasLegend = $false } catch {}\n`;
+  body += `  Write-Output "tier=$tier|seriesCount=$sc|rows=$rowCount|cols=$colCount|chartType=${chartType}"\n`;
+
+  const script = wrapWithCleanup(preamble, body);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.CHART_CREATE);
+}
+
+/**
+ * Create a combo chart (mixed column + line, optional secondary axis)
+ * via PowerShell COM.
+ *
+ * Strategy:
+ *   1. Add a chart, set ChartType to the primary series's type so the
+ *      first SetSourceData binding produces well-shaped series.
+ *   2. SetSourceData against the union range (computed by Excel from
+ *      the two declared ranges if they share columns; otherwise we
+ *      fall back to NewSeries per spec range).
+ *   3. Iterate SeriesCollection() and override each series's ChartType
+ *      and AxisGroup according to the per-series spec.
+ */
+export async function createComboChartViaPowerShell(
+  filePath: string,
+  sheetName: string,
+  options: {
+    primarySeries: { dataRange: string; type: 'column' | 'line'; color?: string };
+    secondarySeries: { dataRange: string; type: 'column' | 'line'; color?: string; useSecondaryAxis?: boolean };
+    position: string;
+    title?: string;
+  }
+): Promise<string> {
+  const { primarySeries, secondarySeries, position, title } = options;
+  validateRange(primarySeries.dataRange);
+  validateRange(secondarySeries.dataRange);
+  validateCellAddress(position);
+  const fileName = basename(filePath);
+
+  const primaryXlType = COMBO_SERIES_TYPE_MAP[primarySeries.type];
+  const secondaryXlType = COMBO_SERIES_TYPE_MAP[secondarySeries.type];
+  if (primaryXlType === undefined || secondaryXlType === undefined) {
+    throw new Error(
+      `Combo chart series type must be one of: ${Object.keys(COMBO_SERIES_TYPE_MAP).join(', ')}.`
+    );
+  }
+
+  const escapedPrimaryRange = escapePowerShellString(primarySeries.dataRange);
+  const escapedSecondaryRange = escapePowerShellString(secondarySeries.dataRange);
+
+  const preamble = buildPreamble(fileName, sheetName);
+  let body = `  $ErrorActionPreference = 'Stop'\n`;
+  body += `  $posCell = $ws.Range('${position}')\n`;
+  body += `  $chartObj = $ws.ChartObjects().Add($posCell.Left, $posCell.Top, 480, 320)\n`;
+  body += `  $chart = $chartObj.Chart\n`;
+  // Initialize with the primary series's type so SetSourceData has a well-known shape
+  body += `  $chart.ChartType = ${primaryXlType}\n`;
+
+  // Bind the primary series via SetSourceData with full 4-tier fallback
+  body += `  $srcRange = $ws.Range('${escapedPrimaryRange}')\n`;
+  body += `  $rowCount = $srcRange.Rows.Count\n`;
+  body += `  $colCount = $srcRange.Columns.Count\n`;
+  body += `  $tier = 'none'\n`;
+  body += `  $errors = @()\n`;
+  body += buildSeriesBindingTiers(escapedPrimaryRange);
+  body += `  $primaryCount = $chart.SeriesCollection().Count\n`;
+
+  // Add the secondary series via NewSeries with range refs (defensive: if
+  // SetSourceData's count is still 0 even after fallback, the throw above
+  // already aborted; here we always have $primaryCount >= 1).
+  body += `  $secRange = $ws.Range('${escapedSecondaryRange}')\n`;
+  body += `  $secRows = $secRange.Rows.Count\n`;
+  body += `  $secCols = $secRange.Columns.Count\n`;
+  body += `  try {\n`;
+  body += `    for ($c = 2; $c -le $secCols; $c++) {\n`;
+  body += `      $ns = $chart.SeriesCollection().NewSeries()\n`;
+  body += `      $ns.Values = $secRange.Columns($c).Offset(1,0).Resize($secRows - 1, 1)\n`;
+  body += `      $ns.XValues = $secRange.Columns(1).Offset(1,0).Resize($secRows - 1, 1)\n`;
+  body += `      $h = $secRange.Cells(1, $c).Value2\n`;
+  body += `      if ($h) { $ns.Name = [string]$h }\n`;
+  body += `    }\n`;
+  body += `  } catch {\n`;
+  body += `    $errors += "ComboSecondary(NewSeries): $($_.Exception.Message)"\n`;
+  body += `  }\n`;
+
+  // Override each series's ChartType + AxisGroup.
+  // Series 1..$primaryCount = primary; remaining = secondary.
+  body += `  $totalCount = $chart.SeriesCollection().Count\n`;
+  body += `  for ($i = 1; $i -le $totalCount; $i++) {\n`;
+  body += `    try {\n`;
+  body += `      $s = $chart.SeriesCollection($i)\n`;
+  body += `      if ($i -le $primaryCount) {\n`;
+  body += `        $s.ChartType = ${primaryXlType}\n`;
+  body += `        $s.AxisGroup = 1\n`;
+  if (primarySeries.color) {
+    const rgb = hexToExcelColor(primarySeries.color);
+    body += `        try { $s.Format.Fill.Visible = -1; $s.Format.Fill.ForeColor.RGB = ${rgb} } catch {}\n`;
+    body += `        try { $s.Format.Line.Visible = -1; $s.Format.Line.ForeColor.RGB = ${rgb} } catch {}\n`;
+  }
+  body += `      } else {\n`;
+  body += `        $s.ChartType = ${secondaryXlType}\n`;
+  body += `        $s.AxisGroup = ${secondarySeries.useSecondaryAxis ? 2 : 1}\n`;
+  if (secondarySeries.color) {
+    const rgb = hexToExcelColor(secondarySeries.color);
+    body += `        try { $s.Format.Fill.Visible = -1; $s.Format.Fill.ForeColor.RGB = ${rgb} } catch {}\n`;
+    body += `        try { $s.Format.Line.Visible = -1; $s.Format.Line.ForeColor.RGB = ${rgb} } catch {}\n`;
+  }
+  body += `      }\n`;
+  body += `    } catch {\n`;
+  body += `      $errors += "ComboSeries[$i]: $($_.Exception.Message)"\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+
+  if (title) {
+    const escapedTitle = escapePowerShellString(title);
+    body += `  $chart.HasTitle = $true\n`;
+    body += `  $chart.ChartTitle.Text = '${escapedTitle}'\n`;
+  }
+  body += `  $chart.HasLegend = $true\n`;
+  body += `  $finalCount = $chart.SeriesCollection().Count\n`;
+  body += `  Write-Output "tier=$tier|seriesCount=$finalCount|primaryCount=$primaryCount|secondaryAxis=${secondarySeries.useSecondaryAxis ? 'true' : 'false'}"\n`;
+
+  const script = wrapWithCleanup(preamble, body);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.CHART_CREATE);
+}
+
+// ============================================================
+// Live-mode INSPECTION tools (read existing charts/pivots/shapes)
+// ============================================================
+// These complement the create/style tools with read-only enumeration.
+// File-mode is impossible because ExcelJS doesn't preserve real chart
+// definitions — Excel must be running with the file open. The tools
+// translate xlChartType / msoShapeType / PivotField.Function enum
+// integers into human-readable strings before returning.
+//
+// Color values returned by COM .RGB are BGR-as-int; the helper below
+// re-orders the bytes back to "#RRGGBB" hex strings.
+//
+// All four return JSON strings. Empty enumeration = "[]".
+
+const PS_CHART_TYPE_NAME_FN = `
+function Get-ChartTypeName([int]$ct) {
+  switch ($ct) {
+    -4169 { 'xyScatter' }
+    -4120 { 'pyramidCol' }
+    -4101 { 'radar' }
+    -4100 { 'doughnut' }
+    1 { 'area' }
+    2 { 'bar3DClustered' }
+    3 { 'bar3DStacked' }
+    4 { 'line' }
+    5 { 'pie' }
+    -4151 { 'lineMarkers' }
+    51 { 'columnClustered' }
+    52 { 'columnStacked' }
+    53 { 'columnStacked100' }
+    54 { 'column3DClustered' }
+    55 { 'column3DStacked' }
+    56 { 'column3DStacked100' }
+    57 { 'barClustered' }
+    58 { 'barStacked' }
+    59 { 'barStacked100' }
+    60 { 'lineStacked' }
+    61 { 'lineStacked100' }
+    63 { 'lineMarkersStacked' }
+    64 { 'lineMarkersStacked100' }
+    65 { 'pieOfPie' }
+    66 { 'pieExploded' }
+    67 { 'pie3DExploded' }
+    68 { 'barOfPie' }
+    69 { 'xyScatterSmooth' }
+    70 { 'xyScatterSmoothNoMarkers' }
+    71 { 'xyScatterLines' }
+    72 { 'xyScatterLinesNoMarkers' }
+    73 { 'areaStacked' }
+    74 { 'areaStacked100' }
+    75 { 'pie3D' }
+    76 { 'line3D' }
+    79 { 'doughnutExploded' }
+    80 { 'radarMarkers' }
+    81 { 'radarFilled' }
+    101 { 'surface' }
+    102 { 'surfaceWireframe' }
+    103 { 'surfaceTopView' }
+    104 { 'surfaceTopViewWireframe' }
+    default { "xl_$ct" }
+  }
+}
+`;
+
+const PS_BGR_TO_HEX_FN = `
+function Get-HexFromBgr($rgbVal) {
+  if ($rgbVal -eq $null) { return $null }
+  try {
+    $i = [int64]$rgbVal
+    if ($i -lt 0) { return $null }
+    $b = ($i -shr 16) -band 0xFF
+    $g = ($i -shr 8) -band 0xFF
+    $r = $i -band 0xFF
+    return ('#{0:X2}{1:X2}{2:X2}' -f $r, $g, $b)
+  } catch { return $null }
+}
+`;
+
+const PS_SHAPE_TYPE_NAME_FN = `
+function Get-ShapeTypeName([int]$st) {
+  switch ($st) {
+    1 { 'autoShape' }
+    2 { 'callout' }
+    3 { 'chart' }
+    4 { 'comment' }
+    5 { 'freeform' }
+    6 { 'group' }
+    7 { 'embeddedOLEObject' }
+    8 { 'formControl' }
+    9 { 'line' }
+    10 { 'linkedOLEObject' }
+    11 { 'linkedPicture' }
+    12 { 'oleControlObject' }
+    13 { 'picture' }
+    14 { 'placeholder' }
+    15 { 'textEffect' }
+    16 { 'mediaObject' }
+    17 { 'textBox' }
+    18 { 'scriptAnchor' }
+    19 { 'tableShape' }
+    20 { 'canvas' }
+    21 { 'diagram' }
+    22 { 'inkShape' }
+    23 { 'inkComment' }
+    24 { 'igxGraphic' }
+    25 { 'webVideo' }
+    27 { 'contentApp' }
+    28 { 'graphic' }
+    29 { 'linkedGraphic' }
+    30 { 'shape3DModel' }
+    31 { 'linkedShape3DModel' }
+    default { "shape_$st" }
+  }
+}
+`;
+
+const PS_PIVOT_FN_NAME_FN = `
+function Get-PivotFunctionName([int]$f) {
+  switch ($f) {
+    -4157 { 'sum' }
+    -4112 { 'count' }
+    -4106 { 'average' }
+    -4136 { 'max' }
+    -4139 { 'min' }
+    -4149 { 'product' }
+    -4128 { 'countNums' }
+    -4155 { 'stDev' }
+    -4156 { 'stDevP' }
+    -4164 { 'var' }
+    -4165 { 'varP' }
+    default { "fn_$f" }
+  }
+}
+`;
+
+/**
+ * List charts on one sheet (or all sheets if sheetName omitted).
+ * Returns JSON array of chart summaries. Live-mode only.
+ */
+export async function listChartsViaPowerShell(
+  filePath: string,
+  sheetName?: string
+): Promise<string> {
+  const fileName = basename(filePath);
+  const preamble = buildPreamble(fileName, sheetName);
+
+  let body = `  ${PS_CHART_TYPE_NAME_FN}\n`;
+  body += `  $charts = @()\n`;
+  if (sheetName) {
+    body += `  $sheets = @($ws)\n`;
+  } else {
+    body += `  $sheets = @(); foreach ($s in $wb.Worksheets) { $sheets += $s }\n`;
+  }
+  body += `  foreach ($sheet in $sheets) {\n`;
+  body += `    $idx = 0\n`;
+  body += `    foreach ($co in $sheet.ChartObjects()) {\n`;
+  body += `      $idx++\n`;
+  body += `      try {\n`;
+  body += `        $ch = $co.Chart\n`;
+  body += `        $hasTitle = $false; $titleText = $null\n`;
+  body += `        try { $hasTitle = [bool]$ch.HasTitle; if ($hasTitle) { $titleText = [string]$ch.ChartTitle.Text } } catch {}\n`;
+  body += `        $seriesCount = 0\n`;
+  body += `        try { $seriesCount = [int]$ch.SeriesCollection().Count } catch {}\n`;
+  body += `        $dataRange = $null\n`;
+  body += `        if ($seriesCount -gt 0) { try { $dataRange = [string]$ch.SeriesCollection(1).Formula } catch {} }\n`;
+  body += `        $charts += @{\n`;
+  body += `          name = [string]$co.Name\n`;
+  body += `          index = $idx\n`;
+  body += `          sheet = [string]$sheet.Name\n`;
+  body += `          chartType = (Get-ChartTypeName ([int]$ch.ChartType))\n`;
+  body += `          chartTypeId = [int]$ch.ChartType\n`;
+  body += `          position = @{ left = [double]$co.Left; top = [double]$co.Top; width = [double]$co.Width; height = [double]$co.Height }\n`;
+  body += `          seriesCount = $seriesCount\n`;
+  body += `          hasTitle = $hasTitle\n`;
+  body += `          titleText = $titleText\n`;
+  body += `          dataRange = $dataRange\n`;
+  body += `        }\n`;
+  body += `      } catch {\n`;
+  body += `        $charts += @{ name = [string]$co.Name; index = $idx; sheet = [string]$sheet.Name; error = $_.Exception.Message }\n`;
+  body += `      }\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+  body += `  ConvertTo-Json -InputObject @($charts) -Depth 5 -Compress\n`;
+
+  const script = wrapWithCleanup(preamble, body);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.READ);
+}
+
+/**
+ * Get full detail for one chart on a specific sheet, by index (1-based) OR by name.
+ * Returns JSON object. Live-mode only.
+ */
+export async function getChartViaPowerShell(
+  filePath: string,
+  sheetName: string,
+  chartIndex?: number,
+  chartName?: string
+): Promise<string> {
+  if (chartIndex === undefined && !chartName) {
+    throw new Error('Either chartIndex or chartName must be provided');
+  }
+  const fileName = basename(filePath);
+  const preamble = buildPreamble(fileName, sheetName);
+
+  let body = `  ${PS_CHART_TYPE_NAME_FN}\n`;
+  body += `  ${PS_BGR_TO_HEX_FN}\n`;
+
+  if (chartName) {
+    body += `  $co = $ws.ChartObjects('${escapePowerShellString(chartName)}')\n`;
+  } else {
+    body += `  $co = $ws.ChartObjects(${chartIndex})\n`;
+  }
+  body += `  $ch = $co.Chart\n`;
+  body += `  $result = [ordered]@{\n`;
+  body += `    name = [string]$co.Name\n`;
+  body += `    sheet = [string]$ws.Name\n`;
+  body += `    chartType = (Get-ChartTypeName ([int]$ch.ChartType))\n`;
+  body += `    chartTypeId = [int]$ch.ChartType\n`;
+  body += `    position = @{ left = [double]$co.Left; top = [double]$co.Top; width = [double]$co.Width; height = [double]$co.Height }\n`;
+  body += `  }\n`;
+
+  // Title
+  body += `  try {\n`;
+  body += `    $ht = [bool]$ch.HasTitle\n`;
+  body += `    if ($ht) {\n`;
+  body += `      $tFontColor = $null; try { $tFontColor = (Get-HexFromBgr $ch.ChartTitle.Font.Color) } catch {}\n`;
+  body += `      $result['title'] = @{ visible = $true; text = [string]$ch.ChartTitle.Text; fontSize = [double]$ch.ChartTitle.Font.Size; fontColor = $tFontColor }\n`;
+  body += `    } else { $result['title'] = @{ visible = $false } }\n`;
+  body += `  } catch { $result['title'] = @{ visible = $false; error = $_.Exception.Message } }\n`;
+
+  // Axes
+  body += `  $axes = @{}\n`;
+  body += `  foreach ($pair in @(@(1, 'category'), @(2, 'value'))) {\n`;
+  body += `    $axId = [int]$pair[0]; $axKey = [string]$pair[1]\n`;
+  body += `    try {\n`;
+  body += `      $ax = $ch.Axes($axId)\n`;
+  body += `      $axInfo = @{ visible = $true }\n`;
+  body += `      try { $axInfo['numberFormat'] = [string]$ax.TickLabels.NumberFormat } catch {}\n`;
+  body += `      try { $axInfo['fontSize'] = [double]$ax.TickLabels.Font.Size } catch {}\n`;
+  body += `      try { $axInfo['fontColor'] = (Get-HexFromBgr $ax.TickLabels.Font.Color) } catch {}\n`;
+  body += `      try { $axInfo['min'] = [double]$ax.MinimumScale } catch {}\n`;
+  body += `      try { $axInfo['max'] = [double]$ax.MaximumScale } catch {}\n`;
+  body += `      try { $axInfo['hasMajorGridlines'] = [bool]$ax.HasMajorGridlines } catch {}\n`;
+  body += `      $axes[$axKey] = $axInfo\n`;
+  body += `    } catch { $axes[$axKey] = @{ visible = $false } }\n`;
+  body += `  }\n`;
+  body += `  $result['axes'] = $axes\n`;
+
+  // Legend
+  body += `  try {\n`;
+  body += `    $hl = [bool]$ch.HasLegend\n`;
+  body += `    if ($hl) {\n`;
+  body += `      $legColor = $null; try { $legColor = (Get-HexFromBgr $ch.Legend.Font.Color) } catch {}\n`;
+  body += `      $legPos = $null; try { $legPos = [int]$ch.Legend.Position } catch {}\n`;
+  body += `      $legSize = $null; try { $legSize = [double]$ch.Legend.Font.Size } catch {}\n`;
+  body += `      $result['legend'] = @{ visible = $true; positionId = $legPos; fontSize = $legSize; fontColor = $legColor }\n`;
+  body += `    } else { $result['legend'] = @{ visible = $false } }\n`;
+  body += `  } catch { $result['legend'] = @{ visible = $false; error = $_.Exception.Message } }\n`;
+
+  // Series
+  body += `  $series = @()\n`;
+  body += `  try {\n`;
+  body += `    $sc = [int]$ch.SeriesCollection().Count\n`;
+  body += `    for ($i = 1; $i -le $sc; $i++) {\n`;
+  body += `      $s = $ch.SeriesCollection($i)\n`;
+  body += `      $sName = $null; try { $sName = [string]$s.Name } catch {}\n`;
+  body += `      $sFormula = $null; try { $sFormula = [string]$s.Formula } catch {}\n`;
+  body += `      $sColor = $null\n`;
+  body += `      try { $sColor = (Get-HexFromBgr $s.Format.Fill.ForeColor.RGB) } catch {}\n`;
+  body += `      if ($sColor -eq $null) { try { $sColor = (Get-HexFromBgr $s.Format.Line.ForeColor.RGB) } catch {} }\n`;
+  body += `      $sChartType = $null; try { $sChartType = (Get-ChartTypeName ([int]$s.ChartType)) } catch {}\n`;
+  body += `      $hasDl = $false; try { $hasDl = [bool]$s.HasDataLabels } catch {}\n`;
+  body += `      $series += @{ index = $i; name = $sName; formula = $sFormula; color = $sColor; chartType = $sChartType; hasDataLabels = $hasDl }\n`;
+  body += `    }\n`;
+  body += `  } catch {}\n`;
+  body += `  $result['series'] = @($series)\n`;
+
+  // Plot area & chart area
+  body += `  try {\n`;
+  body += `    $paFill = $null; try { $paFill = (Get-HexFromBgr $ch.PlotArea.Format.Fill.ForeColor.RGB) } catch {}\n`;
+  body += `    $result['plotArea'] = @{ fillColor = $paFill }\n`;
+  body += `  } catch { $result['plotArea'] = @{} }\n`;
+  body += `  try {\n`;
+  body += `    $caFill = $null; try { $caFill = (Get-HexFromBgr $ch.ChartArea.Format.Fill.ForeColor.RGB) } catch {}\n`;
+  body += `    $caBorder = $null; try { $caBorder = [bool]$ch.ChartArea.Format.Line.Visible } catch {}\n`;
+  body += `    $result['chartArea'] = @{ fillColor = $caFill; borderVisible = $caBorder }\n`;
+  body += `  } catch { $result['chartArea'] = @{} }\n`;
+
+  body += `  ConvertTo-Json -InputObject $result -Depth 6 -Compress\n`;
+
+  const script = wrapWithCleanup(preamble, body);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.READ);
+}
+
+/**
+ * List PivotTables on one sheet (or all sheets if sheetName omitted).
+ * Returns JSON array. Live-mode only.
+ */
+export async function listPivotTablesViaPowerShell(
+  filePath: string,
+  sheetName?: string
+): Promise<string> {
+  const fileName = basename(filePath);
+  const preamble = buildPreamble(fileName, sheetName);
+
+  let body = `  ${PS_PIVOT_FN_NAME_FN}\n`;
+  body += `  $pivots = @()\n`;
+  if (sheetName) {
+    body += `  $sheets = @($ws)\n`;
+  } else {
+    body += `  $sheets = @(); foreach ($s in $wb.Worksheets) { $sheets += $s }\n`;
+  }
+  body += `  foreach ($sheet in $sheets) {\n`;
+  body += `    foreach ($pt in $sheet.PivotTables()) {\n`;
+  body += `      try {\n`;
+  body += `        $sourceData = $null; try { $sourceData = [string]$pt.SourceData } catch {}\n`;
+  body += `        $sourceSheet = $null; $sourceRange = $sourceData\n`;
+  body += `        if ($sourceData -and $sourceData -match "^'?(.+?)'?!(.+)$") { $sourceSheet = $matches[1]; $sourceRange = $matches[2] }\n`;
+  body += `        $tgtAddr = $null; try { $tgtAddr = [string]$pt.TableRange1.Address($false, $false) } catch {}\n`;
+  body += `        $rowFields = @(); try { foreach ($f in $pt.RowFields) { $rowFields += [string]$f.Name } } catch {}\n`;
+  body += `        $colFields = @(); try { foreach ($f in $pt.ColumnFields) { $colFields += [string]$f.Name } } catch {}\n`;
+  body += `        $filterFields = @(); try { foreach ($f in $pt.PageFields) { $filterFields += [string]$f.Name } } catch {}\n`;
+  body += `        $dataFields = @(); try { foreach ($f in $pt.DataFields) { $dataFields += @{ name = [string]$f.Name; sourceField = [string]$f.SourceName; function = (Get-PivotFunctionName ([int]$f.Function)); functionId = [int]$f.Function } } } catch {}\n`;
+  body += `        $pivots += @{\n`;
+  body += `          name = [string]$pt.Name\n`;
+  body += `          sheet = [string]$sheet.Name\n`;
+  body += `          sourceData = $sourceData\n`;
+  body += `          sourceSheet = $sourceSheet\n`;
+  body += `          sourceRange = $sourceRange\n`;
+  body += `          targetCell = $tgtAddr\n`;
+  body += `          rowFields = @($rowFields)\n`;
+  body += `          columnFields = @($colFields)\n`;
+  body += `          dataFields = @($dataFields)\n`;
+  body += `          filterFields = @($filterFields)\n`;
+  body += `        }\n`;
+  body += `      } catch {\n`;
+  body += `        $pivots += @{ name = [string]$pt.Name; sheet = [string]$sheet.Name; error = $_.Exception.Message }\n`;
+  body += `      }\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+  body += `  ConvertTo-Json -InputObject @($pivots) -Depth 5 -Compress\n`;
+
+  const script = wrapWithCleanup(preamble, body);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.READ);
+}
+
+/**
+ * List shapes on one sheet (or all sheets). Returns JSON array.
+ * Live-mode only — ExcelJS does not preserve shape attributes faithfully.
+ */
+export async function listShapesViaPowerShell(
+  filePath: string,
+  sheetName?: string
+): Promise<string> {
+  const fileName = basename(filePath);
+  const preamble = buildPreamble(fileName, sheetName);
+
+  let body = `  ${PS_SHAPE_TYPE_NAME_FN}\n`;
+  body += `  ${PS_BGR_TO_HEX_FN}\n`;
+  body += `  $shapes = @()\n`;
+  if (sheetName) {
+    body += `  $sheets = @($ws)\n`;
+  } else {
+    body += `  $sheets = @(); foreach ($s in $wb.Worksheets) { $sheets += $s }\n`;
+  }
+  body += `  foreach ($sheet in $sheets) {\n`;
+  body += `    foreach ($shp in $sheet.Shapes) {\n`;
+  body += `      try {\n`;
+  body += `        $hasText = $false; $textVal = $null\n`;
+  body += `        try { $hasText = [bool]$shp.TextFrame2.HasText; if ($hasText) { $textVal = [string]$shp.TextFrame2.TextRange.Text } } catch {}\n`;
+  body += `        $fillColor = $null\n`;
+  body += `        try { $fillColor = (Get-HexFromBgr $shp.Fill.ForeColor.RGB) } catch {}\n`;
+  body += `        $lineVisible = $null\n`;
+  body += `        try { $lineVisible = ([int]$shp.Line.Visible -eq -1) } catch {}\n`;
+  body += `        $shapes += @{\n`;
+  body += `          name = [string]$shp.Name\n`;
+  body += `          type = (Get-ShapeTypeName ([int]$shp.Type))\n`;
+  body += `          typeId = [int]$shp.Type\n`;
+  body += `          sheet = [string]$sheet.Name\n`;
+  body += `          position = @{ left = [double]$shp.Left; top = [double]$shp.Top; width = [double]$shp.Width; height = [double]$shp.Height }\n`;
+  body += `          hasText = $hasText\n`;
+  body += `          text = $textVal\n`;
+  body += `          fillColor = $fillColor\n`;
+  body += `          lineVisible = $lineVisible\n`;
+  body += `        }\n`;
+  body += `      } catch {\n`;
+  body += `        $shapes += @{ name = [string]$shp.Name; sheet = [string]$sheet.Name; error = $_.Exception.Message }\n`;
+  body += `      }\n`;
+  body += `    }\n`;
+  body += `  }\n`;
+  body += `  ConvertTo-Json -InputObject @($shapes) -Depth 5 -Compress\n`;
+
+  const script = wrapWithCleanup(preamble, body);
+  return await execPowerShellWithRetry(script, MAX_RETRIES, TOOL_TIMEOUTS.READ);
 }

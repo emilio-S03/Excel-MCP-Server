@@ -19,6 +19,7 @@ import { createSheet, deleteSheet, renameSheet, duplicateSheet, setSheetProtecti
 import { deleteRows, deleteColumns, copyRange } from './tools/operations.js';
 import { searchValue, filterRows } from './tools/analysis.js';
 import { createChart, styleChart } from './tools/charts.js';
+import { createModernChart, createComboChart } from './tools/modern-charts.js';
 import { createPivotTable } from './tools/pivots.js';
 import { createTable } from './tools/tables.js';
 import { validateFormulaSyntax, validateExcelRange, getDataValidationInfo, setDataValidation } from './tools/validation.js';
@@ -33,28 +34,91 @@ import { diagnoseConnection } from './tools/diagnose.js';
 import { listPowerQueries, runPowerQuery } from './tools/power-query.js';
 import { setDisplayOptions } from './tools/display.js';
 import { addShape } from './tools/shapes.js';
+import { addImage } from './tools/images.js';
+import { csvImport, csvExport } from './tools/csv.js';
+import { findReplace } from './tools/find-replace.js';
+import { checkEnvironment } from './tools/environment.js';
+import {
+  getConditionalFormats,
+  listDataValidations,
+  getSheetProtection,
+  getDisplayOptions,
+  getWorkbookProperties,
+  setWorkbookProperties,
+  getHyperlinks,
+} from './tools/inspections.js';
+import {
+  sortRange,
+  setAutoFilter,
+  clearAutoFilter,
+  removeDuplicates,
+  pasteSpecial,
+} from './tools/data-ops.js';
+import {
+  setSheetVisibility,
+  listSheetVisibility,
+  hideRows,
+  hideColumns,
+} from './tools/visibility.js';
+import { addHyperlink, removeHyperlink } from './tools/hyperlinks.js';
+import { addSparkline, removeSparklines } from './tools/sparklines.js';
+import { getPageSetup, setPageSetup } from './tools/page-setup.js';
+import { exportPdf } from './tools/pdf-export.js';
+import { listCharts, getChart, listPivotTables, listShapes } from './tools/live-inspections.js';
+import {
+  findFormulaErrors,
+  findCircularReferences,
+  workbookStats,
+  listFormulas,
+  tracePrecedents,
+} from './tools/audit.js';
 
 import { TOOL_ANNOTATIONS } from './constants.js';
 import * as schemas from './schemas/index.js';
-import { setAllowedDirectories } from './tools/helpers.js';
 
 // User configuration storage
+// Hydrated from environment variables at boot. The .mcpb spec uses
+// ${user_config.NAME} substitution to inject these into the spawned
+// process. Manual installs set the same env vars in their server
+// entry. There is no runtime config channel — Spike B (probes/userconfig-probe)
+// confirmed neither Claude Desktop nor Claude Code delivers one.
 interface UserConfig {
-  createBackupByDefault?: boolean;
-  defaultResponseFormat?: 'json' | 'markdown';
-  allowedDirectories?: string[];
+  createBackupByDefault: boolean;
+  defaultResponseFormat: 'json' | 'markdown';
+  allowedDirectories: string[]; // mirror of helpers.ts state, for diagnostics
 }
 
-let userConfig: UserConfig = {
-  createBackupByDefault: false,
-  defaultResponseFormat: 'json',
+function envBool(name: string, fallback: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined || v === '') return fallback;
+  return /^(1|true|yes|on)$/i.test(v.trim());
+}
+
+function envEnum<T extends string>(name: string, allowed: readonly T[], fallback: T): T {
+  const v = process.env[name];
+  if (!v) return fallback;
+  return (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
+}
+
+const userConfig: UserConfig = {
+  createBackupByDefault: envBool('EXCEL_CREATE_BACKUP_BY_DEFAULT', false),
+  defaultResponseFormat: envEnum('EXCEL_DEFAULT_RESPONSE_FORMAT', ['json', 'markdown'] as const, 'json'),
   allowedDirectories: [],
 };
+
+// Sync the helpers state into our diagnostic mirror.
+import { getAllowedDirectories } from './tools/helpers.js';
+{
+  const { dirs } = getAllowedDirectories();
+  userConfig.allowedDirectories = dirs;
+}
+
+console.error('[excel-mcp] user config:', userConfig);
 
 // Schema mapping for validation
 const toolSchemas: Record<string, any> = {
   excel_read_workbook: schemas.readWorkbookSchema,
-  excel_read_sheet: schemas.readSheetSchema,
+  excel_read_sheet: schemas.readSheetPaginatedSchema,
   excel_read_range: schemas.readRangeSchema,
   excel_get_cell: schemas.getCellSchema,
   excel_get_formula: schemas.getFormulaSchema,
@@ -111,13 +175,57 @@ const toolSchemas: Record<string, any> = {
   excel_batch_format: schemas.batchFormatSchema,
   excel_set_display_options: schemas.setDisplayOptionsSchema,
   excel_add_shape: schemas.addShapeSchema,
+  // Phase 3 (v3) — added 2026-04-30
+  excel_add_image: schemas.addImageSchema,
+  excel_csv_import: schemas.csvImportSchema,
+  excel_csv_export: schemas.csvExportSchema,
+  excel_find_replace: schemas.findReplaceSchema,
+  excel_check_environment: schemas.checkEnvironmentSchema,
+  // v3.1 — gap-filler tools
+  excel_get_conditional_formats: schemas.getConditionalFormatsSchema,
+  excel_list_data_validations: schemas.listDataValidationsSchema,
+  excel_get_sheet_protection: schemas.getSheetProtectionSchema,
+  excel_get_display_options: schemas.getDisplayOptionsSchema,
+  excel_get_workbook_properties: schemas.getWorkbookPropertiesSchema,
+  excel_set_workbook_properties: schemas.setWorkbookPropertiesSchema,
+  excel_get_hyperlinks: schemas.getHyperlinksSchema,
+  excel_sort: schemas.sortRangeSchema,
+  excel_set_auto_filter: schemas.setAutoFilterSchema,
+  excel_clear_auto_filter: schemas.clearAutoFilterSchema,
+  excel_remove_duplicates: schemas.removeDuplicatesSchema,
+  excel_paste_special: schemas.pasteSpecialSchema,
+  excel_set_sheet_visibility: schemas.setSheetVisibilitySchema,
+  excel_list_sheet_visibility: schemas.listSheetVisibilitySchema,
+  excel_hide_rows: schemas.hideRowsSchema,
+  excel_hide_columns: schemas.hideColumnsSchema,
+  excel_add_hyperlink: schemas.addHyperlinkSchema,
+  excel_remove_hyperlink: schemas.removeHyperlinkSchema,
+  excel_add_sparkline: schemas.addSparklineSchema,
+  excel_remove_sparklines: schemas.removeSparklinesSchema,
+  excel_get_page_setup: schemas.getPageSetupSchema,
+  excel_set_page_setup: schemas.setPageSetupSchema,
+  excel_export_pdf: schemas.exportPdfSchema,
+  // Formula auditing & workbook health-check
+  excel_find_formula_errors: schemas.findFormulaErrorsSchema,
+  excel_find_circular_references: schemas.findCircularReferencesSchema,
+  excel_workbook_stats: schemas.workbookStatsSchema,
+  excel_list_formulas: schemas.listFormulasSchema,
+  excel_trace_precedents: schemas.tracePrecedentsSchema,
+  // Modern charts (Excel 2016+ — Windows COM live mode only)
+  excel_create_modern_chart: schemas.createModernChartSchema,
+  excel_create_combo_chart: schemas.createComboChartSchema,
+  // Live-mode INSPECTION (read existing charts/pivots/shapes — Excel must be running)
+  excel_list_charts: schemas.listChartsSchema,
+  excel_get_chart: schemas.getChartSchema,
+  excel_list_pivot_tables: schemas.listPivotTablesSchema,
+  excel_list_shapes: schemas.listShapesSchema,
 };
 
 // Create server instance
 const server = new Server(
   {
     name: 'excel-mcp-server',
-    version: '2.0.0',
+    version: '3.2.0',
   },
   {
     capabilities: {
@@ -137,7 +245,7 @@ server.setRequestHandler(InitializeRequestSchema, async () => {
     },
     serverInfo: {
       name: 'excel-mcp-server',
-      version: '2.0.0',
+      version: '3.2.0',
     },
   };
 });
@@ -162,13 +270,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'excel_read_sheet',
-        description: 'Read complete data from a sheet (with optional range)',
+        description: 'Read sheet data, with optional range, pagination, and cell cap. Pagination params (offset, limit, maxCells) prevent context-window blowups on large sheets — start with limit:200 then use the returned nextOffset to page through the rest. Response includes hasMore + nextOffset.',
         inputSchema: {
           type: 'object',
           properties: {
             filePath: { type: 'string', description: 'Path to the Excel file' },
             sheetName: { type: 'string', description: 'Name of the sheet' },
-            range: { type: 'string', description: 'Optional range (e.g., A1:D10)' },
+            range: { type: 'string', description: 'Optional range (e.g., A1:D10). Pagination still applies within the range.' },
+            offset: { type: 'integer', minimum: 0, description: 'Skip this many rows from the start (default: 0)' },
+            limit: { type: 'integer', minimum: 1, description: 'Return at most this many rows. Omit to return all.' },
+            maxCells: { type: 'integer', minimum: 1, description: 'Hard cap on total returned cells; truncates mid-page if exceeded.' },
             responseFormat: { type: 'string', enum: ['json', 'markdown'], default: 'json' },
           },
           required: ['filePath', 'sheetName'],
@@ -1163,6 +1274,446 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
       },
 
+      // ENVIRONMENT PROBE (call this first on a new install)
+      {
+        name: 'excel_check_environment',
+        description: 'Probe the local environment and return a structured capability report: is Excel installed, is it running, is VBA trust enabled (Windows), is Mac Automation permission granted, what folders are sandboxed, what tools are usable RIGHT NOW. Call this when a tool fails unexpectedly, or once at the start of a session before invoking COM/AppleScript-dependent tools — it surfaces config problems with actionable fixes instead of cryptic COM errors.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+
+      // PHASE 3 — IMAGE / CSV / FIND-REPLACE (cross-platform, file-mode)
+      {
+        name: 'excel_add_image',
+        description: 'Insert a PNG/JPG/GIF image into a worksheet. Anchored to a single cell (with optional pixel size) OR stretched to fill a range. Cross-platform — works without Excel running.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Name of the sheet' },
+            imagePath: { type: 'string', description: 'Path to the image file (.png, .jpg, .jpeg, .gif)' },
+            cell: { type: 'string', description: 'Anchor cell (e.g., "B2"). Mutually exclusive with `range`.' },
+            range: { type: 'string', description: 'Range covering the image (e.g., "B2:F10"). Mutually exclusive with `cell`.' },
+            widthPx: { type: 'number', description: 'Image width in pixels (used with `cell`).' },
+            heightPx: { type: 'number', description: 'Image height in pixels (used with `cell`).' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'imagePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_csv_import',
+        description: 'Read a CSV file and write it as a sheet in an .xlsx workbook. If the workbook does not exist it is created. If a sheet with the same name exists it is replaced. Numeric strings are auto-converted to numbers. Cross-platform.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            csvPath: { type: 'string', description: 'Path to the CSV file to read' },
+            targetXlsx: { type: 'string', description: 'Path to the .xlsx file to write/update' },
+            sheetName: { type: 'string', description: 'Sheet name (default: "Sheet1"). Replaces existing sheet of the same name.' },
+            delimiter: { type: 'string', description: 'Field delimiter (default: ",")' },
+            hasHeader: { type: 'boolean', default: false, description: 'Bold the first row as a header.' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['csvPath', 'targetXlsx'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_csv_export',
+        description: 'Write a sheet (or range) to a CSV file. Cross-platform.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the source Excel file' },
+            sheetName: { type: 'string', description: 'Name of the source sheet' },
+            csvPath: { type: 'string', description: 'Path to write the CSV file' },
+            range: { type: 'string', description: 'Optional range to export (default: entire sheet)' },
+            delimiter: { type: 'string', description: 'Field delimiter (default: ",")' },
+          },
+          required: ['filePath', 'sheetName', 'csvPath'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_find_replace',
+        description: 'Find and replace text across one sheet or the entire workbook. Supports plain or regex patterns and case sensitivity. Use `dryRun: true` to preview matches before applying. Returns a list of changes (capped at 100). Cross-platform.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            pattern: { type: 'string', description: 'Text or regex to find' },
+            replacement: { type: 'string', description: 'Replacement text. Use $1, $2 for regex backreferences.' },
+            sheetName: { type: 'string', description: 'Limit to one sheet (default: all sheets)' },
+            regex: { type: 'boolean', default: false },
+            caseSensitive: { type: 'boolean', default: false },
+            dryRun: { type: 'boolean', default: false, description: 'Return matches without modifying the file.' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'pattern', 'replacement'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // ============================================================
+      // v3.1 — GAP-FILLER TOOLS (mostly file-mode, cross-platform)
+      // ============================================================
+
+      // --- read existing structure ---
+      {
+        name: 'excel_get_conditional_formats',
+        description: 'Read all conditional formatting rules on a sheet — type, ranges, conditions, styles, color scales, icon sets. Use this to audit or replicate CF setups across workbooks. File-mode, cross-platform.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+          },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_list_data_validations',
+        description: 'List ALL data validation rules on a sheet (vs excel_get_data_validation_info which is single-cell). Returns range, type, formulas, error/prompt messages.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' }, sheetName: { type: 'string' } },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_get_sheet_protection',
+        description: 'Read the current protection state of a sheet — protected? what is allowed? File-mode, cross-platform.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' }, sheetName: { type: 'string' } },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_get_display_options',
+        description: 'Read the current display state of a sheet: gridlines, row/column headers, zoom, freeze pane location, tab color, RTL, active cell. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' }, sheetName: { type: 'string' } },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_get_workbook_properties',
+        description: 'Read workbook-level metadata: creator, last modified by, created/modified dates, title, subject, keywords, category, description, company, manager.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' } },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_set_workbook_properties',
+        description: 'Set workbook-level metadata (any subset of: creator, lastModifiedBy, title, subject, keywords, category, description, company, manager).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            properties: { type: 'object', description: 'Object with optional creator, lastModifiedBy, title, subject, keywords, category, description, company, manager' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'properties'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_get_hyperlinks',
+        description: 'List every cell with a hyperlink on a sheet, with cell address, display text, target URL, and tooltip. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' }, sheetName: { type: 'string' } },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+
+      // --- data ops ---
+      {
+        name: 'excel_sort',
+        description: 'Sort a range by one or more columns (multi-key sort). Each key is {column: <letter or number>, order: "asc"|"desc"}. Optionally hold the first row as a header. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            range: { type: 'string', description: 'Range to sort, e.g., A2:F100' },
+            sortBy: {
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'object',
+                properties: {
+                  column: { description: 'Column letter or 1-based index' },
+                  order: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
+                },
+                required: ['column'],
+              },
+            },
+            hasHeader: { type: 'boolean', default: false },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'range', 'sortBy'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_set_auto_filter',
+        description: 'Turn on Excel auto-filter on a range (the dropdown arrows in the header row). Coworkers can then filter interactively in Excel. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            range: { type: 'string', description: 'Range to filter (header + data), e.g., A1:F100' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'range'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_clear_auto_filter',
+        description: 'Remove the auto-filter from a sheet.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' }, sheetName: { type: 'string' }, createBackup: { type: 'boolean', default: false } },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_remove_duplicates',
+        description: 'Remove duplicate rows from a range. Optionally specify which columns define uniqueness (default: all columns in the range). File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            range: { type: 'string' },
+            columns: { type: 'array', description: 'Columns to consider for uniqueness (letters or 1-based indices)' },
+            hasHeader: { type: 'boolean', default: false },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'range'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_paste_special',
+        description: 'Paste-special: copy a range to a target cell with one of four modes: "values" (formulas → results), "formulas" (copy formulas as-is), "formats" (style only), "transpose" (rows ↔ columns).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            sourceRange: { type: 'string' },
+            targetCell: { type: 'string' },
+            mode: { type: 'string', enum: ['values', 'formulas', 'formats', 'transpose'] },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'sourceRange', 'targetCell', 'mode'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // --- visibility ---
+      {
+        name: 'excel_set_sheet_visibility',
+        description: 'Hide or show a sheet. State: "visible", "hidden" (user can unhide via menu), or "veryHidden" (only this tool or VBA can re-show). Refuses to hide the last visible sheet.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            state: { type: 'string', enum: ['visible', 'hidden', 'veryHidden'] },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'state'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_list_sheet_visibility',
+        description: 'List every sheet with its visibility state (visible/hidden/veryHidden). Useful to find hidden sheets in a workbook you didn\'t author.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' } },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_hide_rows',
+        description: 'Hide (or unhide with hidden:false) one or more contiguous rows. Use for collapsing detail in dashboards.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            startRow: { type: 'integer', minimum: 1 },
+            count: { type: 'integer', minimum: 1, default: 1 },
+            hidden: { type: 'boolean', default: true },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'startRow'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_hide_columns',
+        description: 'Hide (or unhide with hidden:false) one or more contiguous columns. Accepts column letters or 1-based numbers.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            startColumn: { description: 'Column letter (A) or number (1)' },
+            count: { type: 'integer', minimum: 1, default: 1 },
+            hidden: { type: 'boolean', default: true },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'startColumn'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // --- hyperlinks ---
+      {
+        name: 'excel_add_hyperlink',
+        description: 'Add a hyperlink to a cell. Target can be a URL, mailto:, or an internal sheet reference like "Sheet2!A1". Auto-styles as blue underline. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            cellAddress: { type: 'string' },
+            target: { type: 'string', description: 'URL, mailto:, or sheet ref (Sheet2!A1)' },
+            text: { type: 'string', description: 'Display text (default: existing cell value or the target)' },
+            tooltip: { type: 'string' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'cellAddress', 'target'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_remove_hyperlink',
+        description: 'Remove the hyperlink from a cell. Optionally keep the display text (keepText:true, default) or clear the cell entirely (keepText:false).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            cellAddress: { type: 'string' },
+            keepText: { type: 'boolean', default: true },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'cellAddress'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // --- sparklines ---
+      {
+        name: 'excel_add_sparkline',
+        description: 'Add an Excel sparkline group to a worksheet. Sparklines are tiny in-cell charts (line/column/winLoss). dataRange is the source data ("A1:A10" or "Sheet2!A1:A10"); locationRange is where the sparkline(s) render — single cell ("B1") for one sparkline covering the whole data range, or a multi-cell range ("B1:B5") to slice the data row-by-row or column-by-column. Optional color (hex), negativeColor, markers, high/low/first/last point highlighting. File-mode (works without Excel running). Bypasses ExcelJS by editing the worksheet OOXML <extLst> directly.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            type: { type: 'string', enum: ['line', 'column', 'winLoss'] },
+            dataRange: { type: 'string', description: 'Source data range, e.g., "A1:A10" or "Sheet2!A1:A10"' },
+            locationRange: { type: 'string', description: 'Cell ("B1") or range ("B1:B5") where sparklines render' },
+            color: { type: 'string', description: 'Series color hex (#RRGGBB or AARRGGBB)' },
+            negativeColor: { type: 'string', description: 'Negative-value color hex' },
+            markers: { type: 'boolean' },
+            high: { type: 'boolean' },
+            low: { type: 'boolean' },
+            first: { type: 'boolean' },
+            last: { type: 'boolean' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'type', 'dataRange', 'locationRange'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_remove_sparklines',
+        description: 'Remove sparklines from a worksheet. With locationRange, removes only the sparklines in matching cells; without it, removes every sparkline group on the sheet. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            locationRange: { type: 'string', description: 'Cell or range to remove sparklines from. Omit to remove all sparklines on the sheet.' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // --- page setup ---
+      {
+        name: 'excel_get_page_setup',
+        description: 'Read the page setup of a sheet: orientation, paper size, margins, scale/fit, print area, print titles, header/footer text. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: { filePath: { type: 'string' }, sheetName: { type: 'string' } },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_set_page_setup',
+        description: 'Configure page setup: orientation (portrait/landscape), paperSize (1=Letter, 9=A4), fitToPage + fitToWidth/fitToHeight, scale (10-400%), printArea (e.g., A1:M50), printTitlesRow/Column for repeat-on-every-page, margins, headerFooter (oddHeader/oddFooter etc.). File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            sheetName: { type: 'string' },
+            config: { type: 'object', description: 'Any subset of orientation, paperSize, fitToPage, fitToWidth, fitToHeight, scale, horizontalCentered, verticalCentered, printArea, printTitlesRow, printTitlesColumn, margins{...}, headerFooter{oddHeader,oddFooter,evenHeader,evenFooter}' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'config'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // --- pdf export (live mode) ---
+      {
+        name: 'excel_export_pdf',
+        description: 'Export a workbook (or one sheet, or a range) to PDF. Requires Excel to be running with the file open. Windows: COM ExportAsFixedFormat. macOS: AppleScript "save as PDF". Linux: not supported (use LibreOffice CLI separately).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to .xlsx (must be open in Excel)' },
+            outputPath: { type: 'string', description: 'Path to write the PDF' },
+            sheetName: { type: 'string', description: 'Limit to one sheet (default: whole workbook)' },
+            range: { type: 'string', description: 'Limit to a range (requires sheetName)' },
+            openAfterPublish: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'outputPath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+
       // SHAPES (COM-only)
       {
         name: 'excel_add_shape',
@@ -1233,6 +1784,189 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
         annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
       },
+
+      // FORMULA AUDITING & WORKBOOK HEALTH-CHECK (file-mode, cross-platform)
+      {
+        name: 'excel_find_formula_errors',
+        description: 'Scan all (or one) sheets for cells containing Excel error values (#DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NULL!, #NUM!). Returns each error cell with its sheet, address, formula (if any), and error type. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Optional: limit scan to one sheet (default: scan all sheets)' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_find_circular_references',
+        description: 'Best-effort circular reference detection across the whole workbook. Flags cells whose formula references themselves directly OR via a one-hop transitive cycle. Returns each offender with its formula and resolved referenced cells. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_workbook_stats',
+        description: 'Workbook-wide stats for health-check / "why is this file 50MB?" debugging. Returns totals (sheets, cells, formulas, merged ranges, named ranges, conditional formats, data validations, hyperlinks, images, charts, tables), file size in bytes, and a per-sheet breakdown with cells, formulas, and a size-contribution metric. File-mode.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_list_formulas',
+        description: 'Inventory every formula on a sheet. Returns each cell address, formula text, and cached result (when available). Optional filter: "all" (default), "array" (array formulas), "shared" (shared formula cells). Use maxResults to cap output on huge sheets.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Name of the sheet' },
+            filter: { type: 'string', enum: ['all', 'array', 'shared'], default: 'all', description: 'Filter by formula category (default: all formulas)' },
+            maxResults: { type: 'integer', minimum: 1, description: 'Optional cap on returned formula entries' },
+          },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_trace_precedents',
+        description: 'Best-effort one-level precedent trace for a single cell. Parses the cell formula, extracts referenced cells/ranges (cross-sheet aware), and returns each precedent with its current value and (if it is itself a formula) its formula text. Depth is capped at 1 to avoid runaway transitive walks.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Name of the sheet containing the cell' },
+            cellAddress: { type: 'string', description: 'Cell address (e.g., B1)' },
+          },
+          required: ['filePath', 'sheetName', 'cellAddress'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+
+      // MODERN CHARTS (Excel 2016+ — Windows COM live mode only)
+      {
+        name: 'excel_create_modern_chart',
+        description: 'Create a modern Excel 2016+ chart: waterfall, funnel, treemap, sunburst, histogram, or boxWhisker (box plot). Live mode only — requires Excel running on Windows with the file open. On macOS, use Microsoft Office Scripts in Excel for the Web. After creation, use excel_style_chart to refine colors/axes/legend. DESIGN RULES: No 3D effects. Title 11pt bold #424242. Use brand colors (#1E3247 navy, #00BCD4 cyan, #009688 teal). Treemap/sunburst: hide legend by default and rely on segment labels. Waterfall: keep the auto-coloring (positive/negative/total). Histogram: do not pre-bin the data — let Excel auto-bin.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Sheet where the chart will be placed' },
+            chartType: { type: 'string', enum: ['waterfall', 'funnel', 'treemap', 'sunburst', 'histogram', 'boxWhisker'] },
+            dataRange: { type: 'string', description: 'Source data range (e.g., A1:B12) — header row + data rows' },
+            position: { type: 'string', description: 'Top-left cell where the chart will be placed (e.g., F2)' },
+            title: { type: 'string', description: 'Chart title' },
+            dataSheetName: { type: 'string', description: 'Sheet containing the data range (defaults to sheetName)' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'chartType', 'dataRange', 'position'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_create_combo_chart',
+        description: 'Create a combo chart that mixes a clustered column series with a line series on the same plot. Optionally plot the secondary series on a secondary value axis (useful when the two series live on very different scales — e.g., revenue $$$ + growth %). Live mode only — requires Excel running on Windows. Pass each series as { dataRange, type: "column"|"line", color?, useSecondaryAxis? }. Use excel_style_chart afterward to fine-tune titles, axes, gridlines, and legend.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Sheet where the chart will be placed' },
+            primarySeries: {
+              type: 'object',
+              description: 'Primary series (charted on the main value axis)',
+              properties: {
+                dataRange: { type: 'string', description: 'Range for this series (column 1 = category labels, column 2+ = values)' },
+                type: { type: 'string', enum: ['column', 'line'] },
+                color: { type: 'string', description: 'Hex color for the series fill/line (e.g., "#1E3247")' },
+                useSecondaryAxis: { type: 'boolean', default: false, description: 'Plot on the secondary value axis (typically false for primary)' },
+              },
+              required: ['dataRange', 'type'],
+            },
+            secondarySeries: {
+              type: 'object',
+              description: 'Secondary series (mixed type with the primary)',
+              properties: {
+                dataRange: { type: 'string', description: 'Range for this series (column 1 = category labels, column 2+ = values)' },
+                type: { type: 'string', enum: ['column', 'line'] },
+                color: { type: 'string', description: 'Hex color for the series fill/line' },
+                useSecondaryAxis: { type: 'boolean', default: false, description: 'Plot on the secondary value axis (set to true when scales differ)' },
+              },
+              required: ['dataRange', 'type'],
+            },
+            position: { type: 'string', description: 'Top-left cell where the chart will be placed' },
+            title: { type: 'string', description: 'Chart title' },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'primarySeries', 'secondarySeries', 'position'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+
+      // LIVE-MODE INSPECTION (read existing charts/pivots/shapes — Excel must be running with file open)
+      {
+        name: 'excel_list_charts',
+        description: 'Enumerate native charts (ChartObjects) on a sheet, or all sheets if sheetName is omitted. Returns name, 1-based index, sheet, chartType (translated from xlChartType), position {left, top, width, height in points}, seriesCount, hasTitle, titleText, and the SeriesCollection(1).Formula as dataRange. Live mode only — Excel must be running with the file open. There is no file-mode equivalent because ExcelJS does not preserve real chart definitions. Pair with excel_get_chart for full per-chart detail or excel_style_chart to modify the chart you found.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Limit to one sheet (default: scan all sheets)' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_get_chart',
+        description: 'Read full detail for one chart on a specific sheet, looked up by either chartIndex (1-based) or chartName. Returns chartType, position, title {visible, text, fontSize, fontColor}, axes.category and axes.value (numberFormat, fontSize, fontColor, min, max, hasMajorGridlines), legend {visible, positionId, fontSize, fontColor}, plotArea.fillColor, chartArea.fillColor + borderVisible, and series[] with index, name, formula, color (hex), chartType, hasDataLabels. Colors come back as #RRGGBB hex. Live mode only.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Sheet containing the chart' },
+            chartIndex: { type: 'integer', minimum: 1, description: '1-based chart index (matches ChartObjects() order)' },
+            chartName: { type: 'string', description: 'Chart object name (alternative to chartIndex)' },
+          },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_list_pivot_tables',
+        description: 'Enumerate PivotTables on a sheet (or all sheets if sheetName is omitted). Returns name, sheet, sourceData, parsed sourceSheet + sourceRange, targetCell (TableRange1.Address), rowFields[], columnFields[], dataFields[] (each with name, sourceField, function — translated from xlConsolidationFunction), and filterFields[]. Live mode only — ExcelJS does not preserve PivotTable definitions.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Limit to one sheet (default: scan all sheets)' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_list_shapes',
+        description: 'Enumerate shapes (rectangles, ovals, text boxes, pictures, etc.) on a sheet, or all sheets if sheetName is omitted. Returns name, type (translated from msoShapeType), sheet, position {left, top, width, height in points}, hasText + text, fillColor (hex #RRGGBB), and lineVisible. Useful for inspecting dashboard card layouts created with excel_add_shape. Live mode only — ExcelJS does not preserve shape attributes faithfully.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Limit to one sheet (default: scan all sheets)' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
     ],
   };
 });
@@ -1279,7 +2013,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = await readWorkbook(validatedArgs.filePath, validatedArgs.responseFormat);
         break;
       case 'excel_read_sheet':
-        result = await readSheet(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.range, validatedArgs.responseFormat);
+        result = await readSheet(validatedArgs.filePath, validatedArgs.sheetName, {
+          range: validatedArgs.range,
+          offset: validatedArgs.offset,
+          limit: validatedArgs.limit,
+          maxCells: validatedArgs.maxCells,
+          responseFormat: validatedArgs.responseFormat,
+        });
         break;
       case 'excel_read_range':
         result = await readRange(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.range, validatedArgs.responseFormat);
@@ -1696,6 +2436,171 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
 
       // Shapes (COM-only)
+      case 'excel_check_environment':
+        result = await checkEnvironment();
+        break;
+
+      // v3.1 — gap-filler tools
+      case 'excel_get_conditional_formats':
+        result = await getConditionalFormats(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_list_data_validations':
+        result = await listDataValidations(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_get_sheet_protection':
+        result = await getSheetProtection(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_get_display_options':
+        result = await getDisplayOptions(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_get_workbook_properties':
+        result = await getWorkbookProperties(validatedArgs.filePath);
+        break;
+      case 'excel_set_workbook_properties':
+        result = await setWorkbookProperties(validatedArgs.filePath, validatedArgs.properties, validatedArgs.createBackup);
+        break;
+      case 'excel_get_hyperlinks':
+        result = await getHyperlinks(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_sort':
+        result = await sortRange(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.range, {
+          sortBy: validatedArgs.sortBy,
+          hasHeader: validatedArgs.hasHeader,
+          createBackup: validatedArgs.createBackup,
+        });
+        break;
+      case 'excel_set_auto_filter':
+        result = await setAutoFilter(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.range, validatedArgs.createBackup);
+        break;
+      case 'excel_clear_auto_filter':
+        result = await clearAutoFilter(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.createBackup);
+        break;
+      case 'excel_remove_duplicates':
+        result = await removeDuplicates(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.range, {
+          columns: validatedArgs.columns,
+          hasHeader: validatedArgs.hasHeader,
+          createBackup: validatedArgs.createBackup,
+        });
+        break;
+      case 'excel_paste_special':
+        result = await pasteSpecial(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.sourceRange, validatedArgs.targetCell, {
+          mode: validatedArgs.mode,
+          createBackup: validatedArgs.createBackup,
+        });
+        break;
+      case 'excel_set_sheet_visibility':
+        result = await setSheetVisibility(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.state, validatedArgs.createBackup);
+        break;
+      case 'excel_list_sheet_visibility':
+        result = await listSheetVisibility(validatedArgs.filePath);
+        break;
+      case 'excel_hide_rows':
+        result = await hideRows(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.startRow, validatedArgs.count, validatedArgs.hidden, validatedArgs.createBackup);
+        break;
+      case 'excel_hide_columns':
+        result = await hideColumns(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.startColumn, validatedArgs.count, validatedArgs.hidden, validatedArgs.createBackup);
+        break;
+      case 'excel_add_hyperlink':
+        result = await addHyperlink(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.cellAddress, validatedArgs.target, {
+          text: validatedArgs.text,
+          tooltip: validatedArgs.tooltip,
+          createBackup: validatedArgs.createBackup,
+        });
+        break;
+      case 'excel_remove_hyperlink':
+        result = await removeHyperlink(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.cellAddress, {
+          keepText: validatedArgs.keepText,
+          createBackup: validatedArgs.createBackup,
+        });
+        break;
+      case 'excel_add_sparkline':
+        result = await addSparkline(validatedArgs.filePath, validatedArgs.sheetName, {
+          type: validatedArgs.type,
+          dataRange: validatedArgs.dataRange,
+          locationRange: validatedArgs.locationRange,
+          color: validatedArgs.color,
+          negativeColor: validatedArgs.negativeColor,
+          markers: validatedArgs.markers,
+          high: validatedArgs.high,
+          low: validatedArgs.low,
+          first: validatedArgs.first,
+          last: validatedArgs.last,
+          createBackup: validatedArgs.createBackup,
+        });
+        break;
+      case 'excel_remove_sparklines':
+        result = await removeSparklines(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.locationRange,
+          { createBackup: validatedArgs.createBackup },
+        );
+        break;
+      case 'excel_get_page_setup':
+        result = await getPageSetup(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_set_page_setup':
+        result = await setPageSetup(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.config, validatedArgs.createBackup);
+        break;
+      case 'excel_export_pdf':
+        result = await exportPdf(validatedArgs.filePath, validatedArgs.outputPath, {
+          sheetName: validatedArgs.sheetName,
+          range: validatedArgs.range,
+          openAfterPublish: validatedArgs.openAfterPublish,
+        });
+        break;
+      case 'excel_add_image':
+        result = await addImage(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.imagePath,
+          {
+            cell: validatedArgs.cell,
+            range: validatedArgs.range,
+            widthPx: validatedArgs.widthPx,
+            heightPx: validatedArgs.heightPx,
+            createBackup: validatedArgs.createBackup,
+          }
+        );
+        break;
+      case 'excel_csv_import':
+        result = await csvImport(
+          validatedArgs.csvPath,
+          validatedArgs.targetXlsx,
+          {
+            sheetName: validatedArgs.sheetName,
+            delimiter: validatedArgs.delimiter,
+            hasHeader: validatedArgs.hasHeader,
+            createBackup: validatedArgs.createBackup,
+          }
+        );
+        break;
+      case 'excel_csv_export':
+        result = await csvExport(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.csvPath,
+          {
+            range: validatedArgs.range,
+            delimiter: validatedArgs.delimiter,
+          }
+        );
+        break;
+      case 'excel_find_replace':
+        result = await findReplace(
+          validatedArgs.filePath,
+          validatedArgs.pattern,
+          validatedArgs.replacement,
+          {
+            sheetName: validatedArgs.sheetName,
+            regex: validatedArgs.regex,
+            caseSensitive: validatedArgs.caseSensitive,
+            dryRun: validatedArgs.dryRun,
+            createBackup: validatedArgs.createBackup,
+          }
+        );
+        break;
+
       case 'excel_add_shape':
         result = await addShape(
           validatedArgs.filePath,
@@ -1713,6 +2618,75 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: validatedArgs.text,
           }
         );
+        break;
+
+      // Modern charts (live mode only — Windows COM)
+      case 'excel_create_modern_chart':
+        result = await createModernChart(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          {
+            chartType: validatedArgs.chartType,
+            dataRange: validatedArgs.dataRange,
+            position: validatedArgs.position,
+            title: validatedArgs.title,
+            dataSheetName: validatedArgs.dataSheetName,
+            createBackup: validatedArgs.createBackup,
+          }
+        );
+        break;
+
+      case 'excel_create_combo_chart':
+        result = await createComboChart(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          {
+            primarySeries: validatedArgs.primarySeries,
+            secondarySeries: validatedArgs.secondarySeries,
+            position: validatedArgs.position,
+            title: validatedArgs.title,
+            createBackup: validatedArgs.createBackup,
+          }
+        );
+        break;
+
+      // Formula auditing & workbook health-check
+      case 'excel_find_formula_errors':
+        result = await findFormulaErrors(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_find_circular_references':
+        result = await findCircularReferences(validatedArgs.filePath);
+        break;
+      case 'excel_workbook_stats':
+        result = await workbookStats(validatedArgs.filePath);
+        break;
+      case 'excel_list_formulas':
+        result = await listFormulas(validatedArgs.filePath, validatedArgs.sheetName, {
+          filter: validatedArgs.filter,
+          maxResults: validatedArgs.maxResults,
+        });
+        break;
+      case 'excel_trace_precedents':
+        result = await tracePrecedents(validatedArgs.filePath, validatedArgs.sheetName, validatedArgs.cellAddress);
+        break;
+
+      // Live-mode INSPECTION (read existing charts/pivots/shapes)
+      case 'excel_list_charts':
+        result = await listCharts(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_get_chart':
+        result = await getChart(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.chartIndex,
+          validatedArgs.chartName
+        );
+        break;
+      case 'excel_list_pivot_tables':
+        result = await listPivotTables(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+      case 'excel_list_shapes':
+        result = await listShapes(validatedArgs.filePath, validatedArgs.sheetName);
         break;
 
       default:
@@ -1741,39 +2715,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Handle configuration updates via notifications
-// Note: This will be called by Claude Desktop when user updates config
-async function handleConfigUpdate(config: any) {
-  try {
-    if (config.createBackupByDefault !== undefined) {
-      userConfig.createBackupByDefault = config.createBackupByDefault;
-    }
-
-    if (config.defaultResponseFormat !== undefined) {
-      userConfig.defaultResponseFormat = config.defaultResponseFormat;
-    }
-
-    if (config.allowedDirectories !== undefined) {
-      userConfig.allowedDirectories = Array.isArray(config.allowedDirectories)
-        ? config.allowedDirectories
-        : [];
-
-      // Update allowed directories in helpers
-      setAllowedDirectories(userConfig.allowedDirectories || []);
-    }
-
-    console.error('Configuration updated:', userConfig);
-  } catch (error) {
-    console.error('Error handling configuration:', error);
-  }
-}
-
-// Set up notification handler
-server.notification = async (notification: any) => {
-  if (notification.method === 'notifications/configure') {
-    await handleConfigUpdate(notification.params?.config || notification.params);
-  }
-};
+// Note: the legacy `notifications/configure` channel was removed in v3.0.0.
+// Spike B (probes/userconfig-probe/RESULTS.md) confirmed neither Claude Desktop
+// nor Claude Code delivers it. All user configuration arrives via environment
+// variables hydrated at process spawn (see top of this file).
 
 // Handle EPIPE errors gracefully
 process.stdout.on('error', (err: NodeJS.ErrnoException) => {

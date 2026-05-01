@@ -6,7 +6,13 @@
  */
 import { platform } from 'os';
 import * as applescript from './excel-applescript.js';
+import * as macExt from './applescript-extended.js';
 import * as powershell from './excel-powershell.js';
+import {
+  winOnlyUseOfficeScript,
+  winOnlyFileModeAlt,
+  winOnlyNoAlt,
+} from './platform-errors.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const IS_MAC = platform() === 'darwin';
@@ -240,7 +246,7 @@ export async function getCommentsLive(
   range?: string
 ): Promise<string> {
   if (IS_WINDOWS) return powershell.getCommentsViaPowerShell(filePath, sheetName, range);
-  throw new Error('Live comment reading requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_get_comments', 'comment reading', 'excel_read_sheet (comments are read with cell metadata when reading the sheet directly from disk)');
 }
 
 export async function addCommentLive(
@@ -251,7 +257,7 @@ export async function addCommentLive(
   author?: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.addCommentViaPowerShell(filePath, sheetName, cellAddress, text, author);
-  throw new Error('Live comment editing requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_add_comment', 'comment writing', 'excel_update_cell (comments cannot be added via file mode yet — Mac AppleScript port pending)');
 }
 
 // ============================================================
@@ -260,7 +266,7 @@ export async function addCommentLive(
 
 export async function listNamedRangesLive(filePath: string): Promise<string> {
   if (IS_WINDOWS) return powershell.listNamedRangesViaPowerShell(filePath);
-  throw new Error('Live named range listing requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_list_named_ranges', 'named range listing', 'excel_read_workbook (then inspect names from the file directly — Mac AppleScript port pending)');
 }
 
 export async function createNamedRangeLive(
@@ -270,7 +276,7 @@ export async function createNamedRangeLive(
   range: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.createNamedRangeViaPowerShell(filePath, name, sheetName, range);
-  throw new Error('Live named range creation requires Windows with Excel running');
+  throw winOnlyNoAlt('excel_create_named_range', 'named range creation while Excel is open');
 }
 
 export async function deleteNamedRangeLive(
@@ -278,7 +284,7 @@ export async function deleteNamedRangeLive(
   name: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.deleteNamedRangeViaPowerShell(filePath, name);
-  throw new Error('Live named range deletion requires Windows with Excel running');
+  throw winOnlyNoAlt('excel_delete_named_range', 'named range deletion while Excel is open');
 }
 
 // ============================================================
@@ -303,7 +309,8 @@ export async function setSheetProtectionLive(
   }
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.setSheetProtectionViaPowerShell(filePath, sheetName, protect, password, options);
-  throw new Error('Live sheet protection requires Windows with Excel running');
+  if (IS_MAC) return macExt.setSheetProtectionViaAppleScript(filePath, sheetName, protect, password);
+  throw winOnlyNoAlt('excel_set_sheet_protection', 'live sheet protection');
 }
 
 // ============================================================
@@ -323,7 +330,7 @@ export async function setDataValidationLive(
   errorMessage?: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.setDataValidationViaPowerShell(filePath, sheetName, range, validationType, formula1, operator, formula2, showErrorMessage, errorTitle, errorMessage);
-  throw new Error('Live data validation requires Windows with Excel running');
+  throw winOnlyNoAlt('excel_set_data_validation', 'live data validation rules');
 }
 
 // ============================================================
@@ -335,12 +342,14 @@ export async function triggerRecalculationLive(
   fullRecalc: boolean = false
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.triggerRecalculationViaPowerShell(filePath, fullRecalc);
-  throw new Error('Requires Windows with Excel running');
+  if (IS_MAC) return macExt.triggerRecalculationViaAppleScript(filePath, fullRecalc);
+  throw winOnlyNoAlt('excel_trigger_recalculation', 'live recalculation trigger');
 }
 
 export async function getCalculationModeLive(filePath: string): Promise<string> {
   if (IS_WINDOWS) return powershell.getCalculationModeViaPowerShell(filePath);
-  throw new Error('Requires Windows with Excel running');
+  if (IS_MAC) return macExt.getCalculationModeViaAppleScript(filePath);
+  throw winOnlyNoAlt('excel_get_calculation_mode', 'reading the live calculation mode');
 }
 
 export async function setCalculationModeLive(
@@ -348,7 +357,8 @@ export async function setCalculationModeLive(
   mode: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.setCalculationModeViaPowerShell(filePath, mode);
-  throw new Error('Requires Windows with Excel running');
+  if (IS_MAC) return macExt.setCalculationModeViaAppleScript(filePath, mode);
+  throw winOnlyNoAlt('excel_set_calculation_mode', 'changing the live calculation mode');
 }
 
 // ============================================================
@@ -362,7 +372,8 @@ export async function captureScreenshotLive(
   range?: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.captureScreenshotViaPowerShell(filePath, sheetName, outputPath, range);
-  throw new Error('Requires Windows with Excel running');
+  if (IS_MAC) return macExt.captureScreenshotViaAppleScript(filePath, sheetName, outputPath, range);
+  throw winOnlyNoAlt('excel_capture_screenshot', 'live range capture');
 }
 
 // ============================================================
@@ -375,7 +386,7 @@ export async function runVbaMacroLive(
   args: any[] = []
 ): Promise<string> {
   if (IS_WINDOWS) return powershell.runVbaMacroViaPowerShell(filePath, macroName, args);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyUseOfficeScript('excel_run_vba_macro', 'VBA macro execution');
 }
 
 export async function getVbaCodeLive(
@@ -383,7 +394,7 @@ export async function getVbaCodeLive(
   moduleName: string
 ): Promise<string> {
   if (IS_WINDOWS) return powershell.getVbaCodeViaPowerShell(filePath, moduleName);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyUseOfficeScript('excel_get_vba_code', 'reading VBA module code');
 }
 
 export async function setVbaCodeLive(
@@ -394,7 +405,7 @@ export async function setVbaCodeLive(
   appendMode: boolean = false
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.setVbaCodeViaPowerShell(filePath, moduleName, code, createModule, appendMode);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyUseOfficeScript('excel_set_vba_code', 'writing VBA module code');
 }
 
 // ============================================================
@@ -403,12 +414,12 @@ export async function setVbaCodeLive(
 
 export async function checkVbaTrustLive(): Promise<string> {
   if (IS_WINDOWS) return powershell.checkVbaTrustViaPowerShell();
-  throw new Error('VBA trust settings are Windows-only');
+  throw winOnlyUseOfficeScript('excel_check_vba_trust', 'reading the VBA Trust Center setting (Windows-only registry path)');
 }
 
 export async function enableVbaTrustLive(enable: boolean): Promise<string> {
   if (IS_WINDOWS) return powershell.enableVbaTrustViaPowerShell(enable);
-  throw new Error('VBA trust settings are Windows-only');
+  throw winOnlyUseOfficeScript('excel_enable_vba_trust', 'modifying the VBA Trust Center setting (Windows-only registry path)');
 }
 
 // ============================================================
@@ -417,7 +428,7 @@ export async function enableVbaTrustLive(enable: boolean): Promise<string> {
 
 export async function diagnoseConnectionLive(filePath?: string): Promise<string> {
   if (IS_WINDOWS) return powershell.diagnoseConnectionViaPowerShell(filePath);
-  throw new Error('Connection diagnosis requires Windows with Excel');
+  throw winOnlyFileModeAlt('excel_diagnose_connection', 'COM connection diagnostics', 'excel_check_environment (the cross-platform capability probe — covers Excel install, running state, Automation permission, sandbox dirs)');
 }
 
 // ============================================================
@@ -426,7 +437,7 @@ export async function diagnoseConnectionLive(filePath?: string): Promise<string>
 
 export async function listPowerQueriesLive(filePath: string): Promise<string> {
   if (IS_WINDOWS) return powershell.listPowerQueriesViaPowerShell(filePath);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyNoAlt('excel_list_power_queries', 'Power Query enumeration (no AppleScript or Mac equivalent)');
 }
 
 export async function runPowerQueryLive(
@@ -436,7 +447,7 @@ export async function runPowerQueryLive(
   refreshOnly: boolean = false
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.runPowerQueryViaPowerShell(filePath, queryName, formula, refreshOnly);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyNoAlt('excel_run_power_query', 'Power Query (M language) execution');
 }
 
 // ============================================================
@@ -454,7 +465,7 @@ export async function createChartLive(
   dataSheetName?: string
 ): Promise<string> {
   if (IS_WINDOWS) return powershell.createChartViaPowerShell(filePath, sheetName, chartType, dataRange, position, title, showLegend, dataSheetName);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_create_chart', 'live native chart creation', 'on Mac, charts can be created via the file-mode tool path (current ExcelJS chart support is limited to placeholder shapes — full Mac AppleScript chart implementation is in v3.1)');
 }
 
 // ============================================================
@@ -471,7 +482,7 @@ export async function createPivotTableLive(
   values: Array<{ field: string; aggregation: string }>
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.createPivotTableViaPowerShell(filePath, sourceSheetName, sourceRange, targetSheetName, targetCell, rows, values);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_create_pivot_table', 'live pivot table creation', 'the file-mode pivot path (computes aggregations and writes static values — no refreshable PivotTable yet on Mac)');
 }
 
 // ============================================================
@@ -486,7 +497,7 @@ export async function createTableLive(
   tableStyle: string = 'TableStyleMedium2'
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.createTableViaPowerShell(filePath, sheetName, range, tableName, tableStyle);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyNoAlt('excel_create_table', 'live ListObject (Excel Table) creation');
 }
 
 // ============================================================
@@ -514,7 +525,7 @@ export async function applyConditionalFormatLive(
   }
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.applyConditionalFormatViaPowerShell(filePath, sheetName, range, ruleType, condition, style, colorScale);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_apply_conditional_format', 'live conditional formatting', 'the file-mode equivalent (closes the file, applies via ExcelJS, reopen to see changes)');
 }
 
 // ============================================================
@@ -547,7 +558,7 @@ export async function batchFormatLive(
   }>
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.batchFormatViaPowerShell(filePath, sheetName, operations);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_batch_format', 'live batch formatting', 'individual file-mode tools (excel_format_cell, excel_set_column_width) which work on Mac without Excel running');
 }
 
 // ============================================================
@@ -564,7 +575,8 @@ export async function setDisplayOptionsLive(
   tabColor?: string
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.setDisplayOptionsViaPowerShell(filePath, sheetName, showGridlines, showRowColumnHeaders, zoomLevel, freezePaneCell, tabColor);
-  throw new Error('Requires Windows with Excel running');
+  if (IS_MAC) return macExt.setDisplayOptionsViaAppleScript(filePath, sheetName, showGridlines, showRowColumnHeaders, zoomLevel, freezePaneCell, tabColor);
+  throw winOnlyNoAlt('excel_set_display_options', 'live display options');
 }
 
 // ============================================================
@@ -592,7 +604,7 @@ export async function addShapeLive(
   }
 ): Promise<string> {
   if (IS_WINDOWS) return powershell.addShapeViaPowerShell(filePath, sheetName, config);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_add_shape', 'live shape insertion (used for dashboard cards)', 'excel_add_image (file-mode — embed an image of the dashboard card design instead) until the AppleScript shape port lands in v3.1');
 }
 
 // ============================================================
@@ -626,5 +638,38 @@ export async function styleChartLive(
   }
 ): Promise<void> {
   if (IS_WINDOWS) return powershell.styleChartViaPowerShell(filePath, sheetName, chartIndex, chartName, config);
-  throw new Error('Requires Windows with Excel running');
+  throw winOnlyFileModeAlt('excel_style_chart', 'live native chart restyling', 'excel_create_chart in file-mode (limited styling) — full Mac chart styling lands in v3.1');
+}
+
+// ============================================================
+// Live-mode INSPECTION (read existing charts/pivots/shapes)
+// ============================================================
+
+export async function listChartsLive(filePath: string, sheetName?: string): Promise<string> {
+  if (IS_WINDOWS) return powershell.listChartsViaPowerShell(filePath, sheetName);
+  if (IS_MAC) return macExt.listChartsViaAppleScript(filePath, sheetName);
+  throw winOnlyFileModeAlt('excel_list_charts', 'live chart enumeration', 'no file-mode equivalent — ExcelJS does not preserve real chart definitions, so inspection requires Excel to be running');
+}
+
+export async function getChartLive(
+  filePath: string,
+  sheetName: string,
+  chartIndex?: number,
+  chartName?: string
+): Promise<string> {
+  if (IS_WINDOWS) return powershell.getChartViaPowerShell(filePath, sheetName, chartIndex, chartName);
+  if (IS_MAC) return macExt.getChartViaAppleScript(filePath, sheetName, chartIndex, chartName);
+  throw winOnlyFileModeAlt('excel_get_chart', 'live chart detail inspection', 'no file-mode equivalent — ExcelJS does not preserve real chart definitions, so inspection requires Excel to be running');
+}
+
+export async function listPivotTablesLive(filePath: string, sheetName?: string): Promise<string> {
+  if (IS_WINDOWS) return powershell.listPivotTablesViaPowerShell(filePath, sheetName);
+  if (IS_MAC) return macExt.listPivotTablesViaAppleScript(filePath, sheetName);
+  throw winOnlyFileModeAlt('excel_list_pivot_tables', 'live pivot table enumeration', 'no file-mode equivalent — ExcelJS does not preserve real PivotTable definitions');
+}
+
+export async function listShapesLive(filePath: string, sheetName?: string): Promise<string> {
+  if (IS_WINDOWS) return powershell.listShapesViaPowerShell(filePath, sheetName);
+  if (IS_MAC) return macExt.listShapesViaAppleScript(filePath, sheetName);
+  throw winOnlyFileModeAlt('excel_list_shapes', 'live shape enumeration', 'no file-mode equivalent — ExcelJS does not preserve shape attributes faithfully');
 }

@@ -5,4 +5,10 @@ dist/
 *.xlsx
 !test.xlsx
 .env
-.DS_Store
+
+# Personal cross-machine notes — never commit, never bundle.
+# This file (and the bridge-protocol skill) was a private sync between
+# personal and work setups, not part of the shippable server.
+PROJECT_BRIDGE.md
+skills/excel-mcp-bridge-protocol.md
+mcp-userconfig-probe.log

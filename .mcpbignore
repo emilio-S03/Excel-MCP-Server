@@ -1,0 +1,9 @@
+# Files that must never end up inside a published .mcpb bundle.
+# (mcpb pack already excludes node_modules dev junk; this is for project-personal artifacts.)
+
+PROJECT_BRIDGE.md
+skills/excel-mcp-bridge-protocol.md
+probes/userconfig-probe/RESULTS.md
+mcp-userconfig-probe.log
+*.bak
+*.bak-*

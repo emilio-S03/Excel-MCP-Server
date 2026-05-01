@@ -652,3 +652,376 @@ export const styleChartSchema = z.object({
   width: z.number().optional().describe('Chart width in points'),
   height: z.number().optional().describe('Chart height in points'),
 });
+
+// =============================================================================
+// Phase 3 — new tools (v3): image insert, CSV i/o, find-replace, pagination
+// =============================================================================
+
+export const addImageSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  imagePath: z.string().describe('Path to the image file (.png, .jpg, .jpeg, .gif)'),
+  cell: cellAddressSchema.optional().describe('Anchor cell (e.g., "B2"). Mutually exclusive with `range`.'),
+  range: rangeSchema.optional().describe('Range covering the image (e.g., "B2:F10"). Mutually exclusive with `cell`.'),
+  widthPx: z.number().positive().optional().describe('Image width in pixels (used with `cell`).'),
+  heightPx: z.number().positive().optional().describe('Image height in pixels (used with `cell`).'),
+  createBackup: z.boolean().default(false),
+}).refine(
+  (v) => !(v.cell && v.range),
+  { message: 'Provide either `cell` or `range`, not both.' }
+);
+
+export const csvImportSchema = z.object({
+  csvPath: z.string().describe('Path to the CSV file to read'),
+  targetXlsx: filePathSchema.describe('Path to the .xlsx file to write/update'),
+  sheetName: sheetNameSchema.optional().describe('Sheet name (default: "Sheet1"). Replaces existing sheet of the same name.'),
+  delimiter: z.string().length(1).optional().default(',').describe('Field delimiter (default: ",")'),
+  hasHeader: z.boolean().optional().default(false).describe('Bold the first row as a header.'),
+  createBackup: z.boolean().default(false),
+});
+
+export const csvExportSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  csvPath: z.string().describe('Path to write the CSV file'),
+  range: rangeSchema.optional().describe('Optional range to export (default: entire sheet)'),
+  delimiter: z.string().length(1).optional().default(',').describe('Field delimiter (default: ",")'),
+});
+
+export const checkEnvironmentSchema = z.object({});
+
+// =============================================================================
+// v3.1 — gap-filler tools
+// =============================================================================
+
+// --- inspections (read existing structure) ---
+export const getConditionalFormatsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+});
+export const listDataValidationsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+});
+export const getSheetProtectionSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+});
+export const getDisplayOptionsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+});
+export const getWorkbookPropertiesSchema = z.object({
+  filePath: filePathSchema,
+});
+export const setWorkbookPropertiesSchema = z.object({
+  filePath: filePathSchema,
+  properties: z.object({
+    creator: z.string().optional(),
+    lastModifiedBy: z.string().optional(),
+    title: z.string().optional(),
+    subject: z.string().optional(),
+    keywords: z.string().optional(),
+    category: z.string().optional(),
+    description: z.string().optional(),
+    company: z.string().optional(),
+    manager: z.string().optional(),
+  }),
+  createBackup: z.boolean().default(false),
+});
+export const getHyperlinksSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+});
+
+// --- data ops ---
+export const sortRangeSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  range: rangeSchema,
+  sortBy: z.array(z.object({
+    column: z.union([z.string(), z.number()]).describe('Column letter or 1-based index'),
+    order: z.enum(['asc', 'desc']).optional().default('asc'),
+  })).min(1).describe('One or more sort keys, applied left-to-right'),
+  hasHeader: z.boolean().default(false).describe('First row is a header and not sorted'),
+  createBackup: z.boolean().default(false),
+});
+export const setAutoFilterSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  range: rangeSchema.describe('Range to apply the filter to (e.g., A1:F100)'),
+  createBackup: z.boolean().default(false),
+});
+export const clearAutoFilterSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  createBackup: z.boolean().default(false),
+});
+export const removeDuplicatesSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  range: rangeSchema,
+  columns: z.array(z.union([z.string(), z.number()])).optional()
+    .describe('Columns to consider for uniqueness (default: all columns in range)'),
+  hasHeader: z.boolean().default(false),
+  createBackup: z.boolean().default(false),
+});
+export const pasteSpecialSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  sourceRange: rangeSchema,
+  targetCell: cellAddressSchema,
+  mode: z.enum(['values', 'formulas', 'formats', 'transpose']),
+  createBackup: z.boolean().default(false),
+});
+
+// --- visibility ---
+export const setSheetVisibilitySchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  state: z.enum(['visible', 'hidden', 'veryHidden']),
+  createBackup: z.boolean().default(false),
+});
+export const listSheetVisibilitySchema = z.object({
+  filePath: filePathSchema,
+});
+export const hideRowsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  startRow: z.number().int().positive(),
+  count: z.number().int().positive().default(1),
+  hidden: z.boolean().default(true).describe('false to unhide'),
+  createBackup: z.boolean().default(false),
+});
+export const hideColumnsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  startColumn: z.union([z.string(), z.number()]),
+  count: z.number().int().positive().default(1),
+  hidden: z.boolean().default(true),
+  createBackup: z.boolean().default(false),
+});
+
+// --- hyperlinks ---
+export const addHyperlinkSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  cellAddress: cellAddressSchema,
+  target: z.string().describe('URL or sheet reference (e.g., https://example.com or "Sheet2!A1")'),
+  text: z.string().optional().describe('Display text. Defaults to current cell value or the target.'),
+  tooltip: z.string().optional(),
+  createBackup: z.boolean().default(false),
+});
+export const removeHyperlinkSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  cellAddress: cellAddressSchema,
+  keepText: z.boolean().default(true).describe('Keep the display text in the cell after removing the link'),
+  createBackup: z.boolean().default(false),
+});
+
+// --- page setup ---
+export const getPageSetupSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+});
+export const setPageSetupSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  config: z.object({
+    orientation: z.enum(['portrait', 'landscape']).optional(),
+    paperSize: z.number().optional().describe('Excel paper size code (1=Letter, 9=A4, etc.)'),
+    fitToPage: z.boolean().optional(),
+    fitToWidth: z.number().optional(),
+    fitToHeight: z.number().optional(),
+    scale: z.number().optional().describe('Scale percentage (10-400)'),
+    horizontalCentered: z.boolean().optional(),
+    verticalCentered: z.boolean().optional(),
+    printArea: z.string().optional().describe('Print area range (e.g., A1:M50)'),
+    printTitlesRow: z.string().optional().describe('Rows to repeat at top (e.g., "1:1")'),
+    printTitlesColumn: z.string().optional().describe('Columns to repeat at left (e.g., "A:A")'),
+    margins: z.object({
+      left: z.number().optional(),
+      right: z.number().optional(),
+      top: z.number().optional(),
+      bottom: z.number().optional(),
+      header: z.number().optional(),
+      footer: z.number().optional(),
+    }).optional(),
+    headerFooter: z.object({
+      oddHeader: z.string().optional(),
+      oddFooter: z.string().optional(),
+      evenHeader: z.string().optional(),
+      evenFooter: z.string().optional(),
+    }).optional(),
+  }),
+  createBackup: z.boolean().default(false),
+});
+
+// --- pdf export (live mode required) ---
+export const exportPdfSchema = z.object({
+  filePath: filePathSchema.describe('Path to the .xlsx file (must be open in Excel for live PDF export)'),
+  outputPath: z.string().describe('Path to write the PDF'),
+  sheetName: z.string().optional().describe('Limit export to one sheet (default: whole workbook)'),
+  range: rangeSchema.optional().describe('Limit to a range (requires sheetName)'),
+  openAfterPublish: z.boolean().default(false),
+});
+
+export const findReplaceSchema = z.object({
+  filePath: filePathSchema,
+  pattern: z.string().describe('Text to find. Treated as literal unless `regex: true`.'),
+  replacement: z.string().describe('Replacement text. Use $1, $2 for regex backreferences when `regex: true`.'),
+  sheetName: sheetNameSchema.optional().describe('Limit to one sheet (default: all sheets)'),
+  regex: z.boolean().default(false).describe('Treat `pattern` as a regular expression.'),
+  caseSensitive: z.boolean().default(false),
+  dryRun: z.boolean().default(false).describe('When true, return matches without modifying the file.'),
+  createBackup: z.boolean().default(false),
+});
+
+// --- sparklines ---
+export const addSparklineSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  type: z.enum(['line', 'column', 'winLoss']).describe('Sparkline type. winLoss draws a stacked +/- bar.'),
+  dataRange: z.string().describe('Source data range. Either bare (A1:A10) — assumed on `sheetName` — or qualified (Sheet2!A1:A10).'),
+  locationRange: z.string().describe('Where the sparklines render. Single cell (B1) for one sparkline; multi-cell range (B1:B5) creates one per cell, slicing dataRange row-by-row or column-by-column when shapes match.'),
+  color: z.string().optional().describe('Hex color for the series, e.g., "#376092" or "FF376092"'),
+  negativeColor: z.string().optional().describe('Hex color used for negative values (column/winLoss types).'),
+  markers: z.boolean().optional().describe('Show markers on every point (line type).'),
+  high: z.boolean().optional().describe('Highlight the high point.'),
+  low: z.boolean().optional().describe('Highlight the low point.'),
+  first: z.boolean().optional().describe('Highlight the first point.'),
+  last: z.boolean().optional().describe('Highlight the last point.'),
+  createBackup: z.boolean().default(false),
+});
+
+export const removeSparklinesSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  locationRange: z.string().optional().describe('Cell or range to remove sparklines from. If omitted, removes ALL sparklines on the sheet.'),
+  createBackup: z.boolean().default(false),
+});
+
+// Replaces the original readSheet schema with pagination support.
+// The basic 3-arg form (filePath, sheetName, range) still works.
+export const readSheetPaginatedSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  range: rangeSchema.optional().describe('Optional range. Pagination params still apply within the range.'),
+  offset: z.number().int().nonnegative().optional().default(0).describe('Skip this many rows from the start.'),
+  limit: z.number().int().positive().optional().describe('Return at most this many rows.'),
+  maxCells: z.number().int().positive().optional().describe('Hard cap on returned cells; truncates mid-page if exceeded.'),
+  responseFormat: responseFormatSchema,
+});
+
+// --- formula auditing & workbook health-check ---
+export const findFormulaErrorsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema.optional().describe('Limit scan to one sheet (default: scan all sheets)'),
+});
+
+export const findCircularReferencesSchema = z.object({
+  filePath: filePathSchema,
+});
+
+export const workbookStatsSchema = z.object({
+  filePath: filePathSchema,
+});
+
+export const listFormulasSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  filter: z.enum(['all', 'array', 'shared']).optional().default('all').describe('Filter by formula category. Default: all formulas.'),
+  maxResults: z.number().int().positive().optional().describe('Cap on returned formula entries.'),
+});
+
+export const tracePrecedentsSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  cellAddress: cellAddressSchema,
+});
+
+// =============================================================================
+// Modern charts (Excel 2016+ — Windows COM live mode only)
+// =============================================================================
+
+const modernChartTypeSchema = z.enum([
+  'waterfall',
+  'funnel',
+  'treemap',
+  'sunburst',
+  'histogram',
+  'boxWhisker',
+]);
+
+export const createModernChartSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema.describe('Sheet where the chart will be placed'),
+  chartType: modernChartTypeSchema.describe(
+    'Modern chart type: waterfall, funnel, treemap, sunburst, histogram, or boxWhisker'
+  ),
+  dataRange: rangeSchema.describe('Range of source data (header row + data rows)'),
+  position: cellAddressSchema.describe('Top-left cell where the chart will be placed'),
+  title: z.string().optional().describe('Chart title'),
+  dataSheetName: z
+    .string()
+    .optional()
+    .describe('Sheet containing the data range (defaults to sheetName where chart is placed)'),
+  createBackup: z.boolean().default(false),
+});
+
+const comboSeriesSchema = z.object({
+  dataRange: rangeSchema.describe(
+    'Range for this series (header row + data rows). Column 1 should be the category labels.'
+  ),
+  type: z.enum(['column', 'line']).describe('How to render this series: clustered column or line'),
+  color: z.string().optional().describe('Hex color (e.g., "#1E3247") applied to the series fill/line'),
+  useSecondaryAxis: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Plot this series on the secondary value axis (only meaningful on the secondary series)'),
+});
+
+export const createComboChartSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema.describe('Sheet where the chart will be placed'),
+  primarySeries: comboSeriesSchema.describe('Primary series (charted on the main value axis)'),
+  secondarySeries: comboSeriesSchema.describe(
+    'Secondary series (mixed type with the primary; can opt into the secondary axis)'
+  ),
+  position: cellAddressSchema.describe('Top-left cell where the chart will be placed'),
+  title: z.string().optional().describe('Chart title'),
+  createBackup: z.boolean().default(false),
+});
+
+// =============================================================================
+// Live-mode INSPECTION (read existing charts/pivots/shapes)
+// =============================================================================
+// Live-only — Excel must be running with the file open. There is no file-mode
+// equivalent because ExcelJS does not preserve real chart definitions, pivot
+// caches, or shape attributes round-trip.
+
+export const listChartsSchema = z.object({
+  filePath: filePathSchema.describe('Path to the .xlsx (must be open in Excel)'),
+  sheetName: sheetNameSchema.optional().describe('Limit to one sheet (default: scan all sheets)'),
+});
+
+export const getChartSchema = z.object({
+  filePath: filePathSchema.describe('Path to the .xlsx (must be open in Excel)'),
+  sheetName: sheetNameSchema,
+  chartIndex: z.number().int().positive().optional().describe('1-based chart index on the sheet (matches ChartObjects() ordering)'),
+  chartName: z.string().optional().describe('Chart object name (alternative to chartIndex)'),
+}).refine((d) => d.chartIndex !== undefined || (d.chartName !== undefined && d.chartName.length > 0), {
+  message: 'Must provide either chartIndex or chartName',
+});
+
+export const listPivotTablesSchema = z.object({
+  filePath: filePathSchema.describe('Path to the .xlsx (must be open in Excel)'),
+  sheetName: sheetNameSchema.optional().describe('Limit to one sheet (default: scan all sheets)'),
+});
+
+export const listShapesSchema = z.object({
+  filePath: filePathSchema.describe('Path to the .xlsx (must be open in Excel)'),
+  sheetName: sheetNameSchema.optional().describe('Limit to one sheet (default: scan all sheets)'),
+});

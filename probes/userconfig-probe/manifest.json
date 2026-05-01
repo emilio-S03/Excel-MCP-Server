@@ -1,0 +1,60 @@
+{
+  "dxt_version": "0.1",
+  "name": "userconfig-probe",
+  "version": "0.0.1",
+  "display_name": "MCP user_config Probe",
+  "description": "Diagnostic probe that logs every initialize param + notification Claude Desktop sends. Used to determine which channel delivers user_config at runtime.",
+  "author": { "name": "Excel MCP upgrade team" },
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "probe.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/probe.mjs"],
+      "env": {}
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  },
+  "tools": [
+    {
+      "name": "probe_dump",
+      "description": "Confirms the probe is reachable and returns the log path."
+    }
+  ],
+  "user_config": {
+    "probeStringValue": {
+      "type": "string",
+      "title": "Probe String Value",
+      "description": "If you can read this in the probe log, the user_config string channel works.",
+      "default": "DEFAULT_FROM_MANIFEST",
+      "required": false
+    },
+    "probeNumberValue": {
+      "type": "number",
+      "title": "Probe Number Value",
+      "description": "Numeric variant of the probe.",
+      "default": 42,
+      "required": false
+    },
+    "probeBoolValue": {
+      "type": "boolean",
+      "title": "Probe Bool Value",
+      "description": "Boolean variant.",
+      "default": true,
+      "required": false
+    },
+    "probeAllowedDirectories": {
+      "type": "directory",
+      "title": "Probe Allowed Directories",
+      "description": "Directory-list variant — what excel uses for allowedDirectories.",
+      "default": ["${HOME}/Documents"],
+      "multiple": true,
+      "required": false
+    }
+  }
+}

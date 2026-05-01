@@ -2,7 +2,12 @@
   "mcpServers": {
     "excel": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js"]
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "EXCEL_ALLOWED_DIRS": "C:/Users/YOU/Documents;C:/Users/YOU/Desktop;C:/Users/YOU/Downloads;C:/Users/YOU/Projects",
+        "EXCEL_CREATE_BACKUP_BY_DEFAULT": "false",
+        "EXCEL_DEFAULT_RESPONSE_FORMAT": "json"
+      }
     }
   }
 }

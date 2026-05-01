@@ -40,53 +40,118 @@ export async function readWorkbook(filePath: string, responseFormat: ResponseFor
   return JSON.stringify(info, null, 2);
 }
 
+export interface ReadSheetOptions {
+  range?: string;
+  offset?: number;
+  limit?: number;
+  maxCells?: number;
+  responseFormat?: ResponseFormat;
+}
+
 export async function readSheet(
   filePath: string,
   sheetName: string,
-  range?: string,
+  rangeOrOptions?: string | ReadSheetOptions,
   responseFormat: ResponseFormat = 'json'
 ): Promise<string> {
+  const opts: ReadSheetOptions =
+    typeof rangeOrOptions === 'string' || rangeOrOptions === undefined
+      ? { range: rangeOrOptions, responseFormat }
+      : { responseFormat, ...rangeOrOptions };
+
+  const offset = Math.max(0, opts.offset ?? 0);
+  const limit = opts.limit && opts.limit > 0 ? opts.limit : undefined;
+  const maxCells = opts.maxCells && opts.maxCells > 0 ? opts.maxCells : undefined;
+  const fmt = opts.responseFormat ?? 'json';
+
   const workbook = await loadWorkbook(filePath);
   const sheet = getSheet(workbook, sheetName);
 
   let data: any[][] = [];
+  let totalRows = 0;
+  let totalColumns = 0;
+  let truncatedByCells = false;
 
-  if (range) {
-    const { startRow, startCol, endRow, endCol } = parseRange(range);
-    for (let row = startRow; row <= endRow; row++) {
+  if (opts.range) {
+    const { startRow, startCol, endRow, endCol } = parseRange(opts.range);
+    totalRows = endRow - startRow + 1;
+    totalColumns = endCol - startCol + 1;
+    const sliceStartRow = startRow + offset;
+    const sliceEndRow = limit ? Math.min(endRow, sliceStartRow + limit - 1) : endRow;
+    let cellsCollected = 0;
+    for (let row = sliceStartRow; row <= sliceEndRow; row++) {
       const rowData: any[] = [];
       for (let col = startCol; col <= endCol; col++) {
-        const cell = sheet.getRow(row).getCell(col);
-        rowData.push(cell.value);
+        rowData.push(sheet.getRow(row).getCell(col).value);
       }
+      cellsCollected += rowData.length;
       data.push(rowData);
+      if (maxCells && cellsCollected >= maxCells) {
+        truncatedByCells = true;
+        break;
+      }
     }
   } else {
+    const allRows: any[][] = [];
     sheet.eachRow((row) => {
       const rowData: any[] = [];
       row.eachCell({ includeEmpty: true }, (cell) => {
         rowData.push(cell.value);
       });
-      data.push(rowData);
+      allRows.push(rowData);
     });
+    totalRows = allRows.length;
+    totalColumns = allRows[0]?.length || 0;
+    const sliced = limit ? allRows.slice(offset, offset + limit) : allRows.slice(offset);
+    if (maxCells) {
+      let cells = 0;
+      for (const row of sliced) {
+        cells += row.length;
+        data.push(row);
+        if (cells >= maxCells) {
+          truncatedByCells = true;
+          break;
+        }
+      }
+    } else {
+      data = sliced;
+    }
   }
 
-  if (responseFormat === 'markdown') {
+  const returnedRows = data.length;
+  const consumedRows = offset + returnedRows;
+  const hasMore = consumedRows < totalRows;
+  const nextOffset = hasMore ? consumedRows : null;
+
+  if (fmt === 'markdown') {
     let md = `# Sheet: ${sheetName}\n\n`;
-    if (range) {
-      md += `**Range**: ${range}\n\n`;
-    }
-    md += `**Rows**: ${data.length}\n`;
-    md += `**Columns**: ${data[0]?.length || 0}\n\n`;
-    md += '## Data Preview\n\n';
+    if (opts.range) md += `**Range**: ${opts.range}\n`;
+    md += `**Returned rows**: ${returnedRows} (of ${totalRows} total, offset ${offset})\n`;
+    md += `**Columns**: ${totalColumns}\n`;
+    if (hasMore) md += `**Next offset**: ${nextOffset}\n`;
+    if (truncatedByCells) md += `**Truncated**: hit maxCells limit\n`;
+    md += '\n## Data Preview\n\n';
     md += formatDataAsTable(data.slice(0, 100));
-    if (data.length > 100) {
-      md += `\n\n*Showing first 100 of ${data.length} rows*`;
-    }
+    if (returnedRows > 100) md += `\n\n*Showing first 100 of ${returnedRows} returned rows*`;
     return md;
   }
 
-  return JSON.stringify({ sheetName, range, rowCount: data.length, columnCount: data[0]?.length || 0, data }, null, 2);
+  return JSON.stringify(
+    {
+      sheetName,
+      range: opts.range,
+      rows: data,
+      rowCount: returnedRows,
+      columnCount: totalColumns,
+      totalRows,
+      offset,
+      hasMore,
+      nextOffset,
+      truncatedByCells,
+    },
+    null,
+    2
+  );
 }
 
 export async function readRange(

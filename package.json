@@ -1,7 +1,7 @@
 {
   "name": "@sbraind/excel-mcp-server",
-  "version": "2.0.0",
-  "description": "MCP Server for Excel file operations with 34 tools using ExcelJS",
+  "version": "3.2.0",
+  "description": "MCP Server for Excel file operations with 96 tools using ExcelJS + native Excel automation",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -13,7 +13,14 @@
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
     "prepare": "npm run build",
-    "pack:mcpb": "mcpb pack ."
+    "pack:mcpb": "npm run build && npm run manifest:generate && npx -y @anthropic-ai/mcpb pack .",
+    "manifest:generate": "node scripts/generate-manifest.mjs",
+    "manifest:check": "node scripts/generate-manifest.mjs --check",
+    "test": "node --test test/manifest-sync.test.mjs test/sandbox.test.mjs test/smoke.test.mjs test/v31.test.mjs test/sparklines.test.mjs test/audit.test.mjs test/modern-charts.test.mjs test/live-inspections.test.mjs",
+    "test:smoke": "node --test test/smoke.test.mjs",
+    "test:sandbox": "node --test test/sandbox.test.mjs",
+    "test:manifest": "node --test test/manifest-sync.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "mcp",
@@ -42,7 +49,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "csv-parse": "^5.6.0",
+    "csv-stringify": "^6.7.0",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

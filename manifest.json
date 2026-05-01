@@ -1,9 +1,9 @@
 {
   "dxt_version": "0.1",
   "name": "excel-mcp-server",
-  "version": "2.0.0",
+  "version": "3.2.0",
   "display_name": "Excel MCP Server",
-  "description": "MCP Server for Excel file operations with 34 tools using ExcelJS",
+  "description": "MCP Server for Excel file operations with 96 tools using ExcelJS + native Excel automation",
   "long_description": "A powerful Model Context Protocol (MCP) server for working with Excel files. Provides comprehensive tools for reading, writing, formatting, analyzing Excel spreadsheets, creating charts, pivot tables, conditional formatting, and much more. Built with TypeScript and ExcelJS for maximum reliability and type safety.",
   "author": {
     "name": "Excel MCP Server Team"
@@ -36,12 +36,20 @@
       "args": [
         "${__dirname}/dist/index.js"
       ],
-      "env": {}
+      "env": {
+        "EXCEL_ALLOWED_DIRS": "${user_config.allowedDirectories}",
+        "EXCEL_CREATE_BACKUP_BY_DEFAULT": "${user_config.createBackupByDefault}",
+        "EXCEL_DEFAULT_RESPONSE_FORMAT": "${user_config.defaultResponseFormat}"
+      }
     }
   },
   "compatibility": {
     "claude_desktop": ">=0.10.0",
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=18.0.0"
     }
@@ -53,7 +61,7 @@
     },
     {
       "name": "excel_read_sheet",
-      "description": "Read complete data from a sheet with optional range"
+      "description": "Read sheet data, with optional range, pagination, and cell cap. Pagination params (offset, limit, maxCells) prevent context-window blowups on large sheets — start with limit:200 then use the returned nextOffset to page through the rest. Response includes hasMore + nextOffset."
     },
     {
       "name": "excel_read_range",
@@ -89,11 +97,11 @@
     },
     {
       "name": "excel_format_cell",
-      "description": "Change cell formatting (color, font, borders, alignment)"
+      "description": "Change cell formatting (color, font, borders, alignment). For formatting 3+ cells, prefer excel_batch_format instead (faster, one call). Use Segoe UI font, not default Calibri. Professional color palette: dark navy #1E3247, medium navy #283D52, cyan accent #00BCD4, body text #424242, borders #E0E0E0."
     },
     {
       "name": "excel_set_column_width",
-      "description": "Adjust width of a column"
+      "description": "Adjust width of a column. ALWAYS set widths explicitly — never leave defaults. Guidelines: names/titles=20-25, currency=12-14, percentages=8-10, dates=12, scores/counts=8-10, short codes=8-10, spacer columns=2-3. For multiple columns, prefer excel_batch_format with columnWidth property."
     },
     {
       "name": "excel_set_row_height",
@@ -141,19 +149,23 @@
     },
     {
       "name": "excel_create_chart",
-      "description": "Create charts from data ranges"
+      "description": "Create a chart (line, bar, column, pie, scatter, area). DESIGN RULES: No 3D effects, no gradients, no chart borders. Use flat fills only. Primary color: #1E3247 (dark navy). Secondary: #00BCD4 (cyan). Tertiary: #009688 (teal). Chart title: 11pt bold #424242. Axis labels: 9pt #424242. Gridlines: light gray #E0E0E0, thin. Remove vertical gridlines for bar charts. Legend: 9pt, bottom or right position. Pie charts: max 6-8 slices, group rest as \"Other\", show percentages not values. Bar charts: sort by value (largest first) unless categorical order matters. Line charts: 2pt line weight, circle markers 4pt."
+    },
+    {
+      "name": "excel_style_chart",
+      "description": "Style an existing chart — series colors, data labels, axis formatting, chart/plot area fills, legend, title, and size. Replaces VBA macro styling with a single native call.\n\nSERIES COLORS: Set fill+line color per series index. Use #1E3247 (navy), #00BCD4 (cyan), #009688 (teal), #FF7043 (coral).\nDATA LABELS: Show with number format (e.g., \"$#,##0\"), position (above/center/outsideEnd), font size+color.\nAXES: Hide value axis for clean look, format category labels (rotation, font size), set min/max scale, toggle gridlines.\nCHART/PLOT AREA: Set background fill colors. Use transparent/white for charts layered on dashboard cards.\nLEGEND: Position top/bottom/left/right, set font size+color, or hide entirely.\nTITLE: Set text, font size+color, or hide.\n\nIdentify chart by chartIndex (1-based) or chartName."
     },
     {
       "name": "excel_create_pivot_table",
-      "description": "Create pivot tables for data analysis"
+      "description": "Create a pivot table for data analysis. After creation, use excel_batch_format to style it: header row with #3A5068 fill and white bold text, alternating data rows white/#FAFAFA, total row with #E8F5E9 fill and bold #2E7D32 text, thin borders #E0E0E0."
     },
     {
       "name": "excel_create_table",
-      "description": "Convert ranges to formatted Excel tables"
+      "description": "Convert a range to an Excel table with formatting. Use TableStyleMedium2 or TableStyleDark1 for professional look. After creating the table, use excel_batch_format to apply custom header colors (#3A5068 fill, white bold text) and alternating row colors."
     },
     {
       "name": "excel_validate_formula_syntax",
-      "description": "Validate formula syntax without applying it"
+      "description": "Validate Excel formula syntax without applying it"
     },
     {
       "name": "excel_validate_range",
@@ -181,24 +193,275 @@
     },
     {
       "name": "excel_apply_conditional_format",
-      "description": "Apply conditional formatting to ranges"
+      "description": "Apply conditional formatting to a range. Use semantic colors: positive values = green fill #E8F5E9 with #2E7D32 text, negative = red fill #FFEBEE with #C62828 text, warnings = orange fill #FFF3E0 with #E65100 text. For color scales, use #C62828 (low/bad) to #2E7D32 (high/good). Data bars: use #1E3247 (dark navy)."
+    },
+    {
+      "name": "excel_get_comments",
+      "description": "Get all comments/notes from a sheet or range"
+    },
+    {
+      "name": "excel_add_comment",
+      "description": "Add a comment/note to a cell"
+    },
+    {
+      "name": "excel_list_named_ranges",
+      "description": "List all named ranges in a workbook"
+    },
+    {
+      "name": "excel_create_named_range",
+      "description": "Create a named range in a workbook"
+    },
+    {
+      "name": "excel_delete_named_range",
+      "description": "Delete a named range from a workbook"
+    },
+    {
+      "name": "excel_set_sheet_protection",
+      "description": "Protect or unprotect a sheet with optional password and permissions"
+    },
+    {
+      "name": "excel_set_data_validation",
+      "description": "Set data validation rules on a range (dropdowns, number limits, etc.)"
+    },
+    {
+      "name": "excel_trigger_recalculation",
+      "description": "Trigger recalculation of all formulas (requires Excel running)"
+    },
+    {
+      "name": "excel_get_calculation_mode",
+      "description": "Get the current calculation mode (automatic/manual/semiautomatic, requires Excel running)"
+    },
+    {
+      "name": "excel_set_calculation_mode",
+      "description": "Set calculation mode to automatic, manual, or semiautomatic (requires Excel running)"
+    },
+    {
+      "name": "excel_capture_screenshot",
+      "description": "Capture a screenshot of a sheet or range as PNG (requires Excel running)"
+    },
+    {
+      "name": "excel_run_vba_macro",
+      "description": "Run a VBA macro in the workbook (requires Excel running with VBA trust enabled)"
+    },
+    {
+      "name": "excel_get_vba_code",
+      "description": "Read VBA code from a module (requires Excel running with VBA trust enabled)"
+    },
+    {
+      "name": "excel_set_vba_code",
+      "description": "Write VBA code to a module (requires Excel running with VBA trust enabled)"
+    },
+    {
+      "name": "excel_check_vba_trust",
+      "description": "Check if VBA trust access is enabled in Windows registry (needed for VBA tools)"
+    },
+    {
+      "name": "excel_enable_vba_trust",
+      "description": "Enable or disable VBA trust access in Windows registry. Requires Excel restart. This changes a security setting."
+    },
+    {
+      "name": "excel_diagnose_connection",
+      "description": "Diagnose Excel COM connection issues. Runs a series of checks: Excel process running, COM reachable, Excel responsive (no modal dialogs), file open, VBA trust enabled. Use this when other tools fail with COM errors."
+    },
+    {
+      "name": "excel_list_power_queries",
+      "description": "List all Power Query queries in the workbook (requires Excel running)"
+    },
+    {
+      "name": "excel_run_power_query",
+      "description": "Create or refresh a Power Query (M language) query (requires Excel running)"
+    },
+    {
+      "name": "excel_batch_format",
+      "description": "Apply multiple formatting operations in one call (merge, colors, fonts, widths, borders, values). Much faster and more reliable than individual format calls or VBA macros. Requires Excel running with the file open. PREFERRED tool for dashboard design, report polish, and bulk formatting — use this instead of VBA macros.\n\nDESIGN GUIDE — Follow these rules for professional output:\n• Layout: Row 1 = title bar (merged, dark fill #1E3247, white 14pt bold, height 40). Row 2 = accent line (fill #00BCD4, height 4). Row 3+ = section headers (fill #283D52, white 11pt bold). Then column headers (fill #3A5068, white 10pt bold), then data rows.\n• Font: Use \"Segoe UI\" for everything. Body text = 10pt #424242. Headers = bold white. Never use default Calibri 11.\n• Colors: Dark navy #1E3247 (titles), medium navy #283D52 (sections), slate #3A5068 (col headers), cyan accent #00BCD4 (dividers/highlights), white #FFFFFF (text on dark), off-white #FAFAFA (alternating rows), light gray #F5F5F5 (card backgrounds), border gray #E0E0E0.\n• Semantic: Input cells = yellow fill #FFF9C4, calculated = blue fill #E3F2FD, totals = green fill #E8F5E9 with bold #2E7D32 text, errors = red #C62828, positive = green #1B5E20.\n• Data rows: Alternating white/#FAFAFA, thin borders #E0E0E0, 10pt, height 20. Numbers right-aligned. Text left-aligned.\n• Column widths: ALWAYS set explicitly. Names=20-25, currency=12-14, percentages=8-10, dates=12, scores=8-10. Never leave defaults.\n• Always use unmerge:true before merge:true to prevent errors on re-formatting."
+    },
+    {
+      "name": "excel_set_display_options",
+      "description": "Control worksheet display: hide/show gridlines, row/column headers, set zoom level, freeze panes, set tab color. CRITICAL FOR DASHBOARDS: Always hide gridlines (showGridlines: false) and hide headers (showRowColumnHeaders: false) for any dashboard or designed layout. This transforms a spreadsheet into a clean canvas. Set zoom to 85-100% for dashboards."
+    },
+    {
+      "name": "excel_check_environment",
+      "description": "Probe the local environment and return a structured capability report: is Excel installed, is it running, is VBA trust enabled (Windows), is Mac Automation permission granted, what folders are sandboxed, what tools are usable RIGHT NOW. Call this when a tool fails unexpectedly, or once at the start of a session before invoking COM/AppleScript-dependent tools — it surfaces config problems with actionable fixes instead of cryptic COM errors."
+    },
+    {
+      "name": "excel_add_image",
+      "description": "Insert a PNG/JPG/GIF image into a worksheet. Anchored to a single cell (with optional pixel size) OR stretched to fill a range. Cross-platform — works without Excel running."
+    },
+    {
+      "name": "excel_csv_import",
+      "description": "Read a CSV file and write it as a sheet in an .xlsx workbook. If the workbook does not exist it is created. If a sheet with the same name exists it is replaced. Numeric strings are auto-converted to numbers. Cross-platform."
+    },
+    {
+      "name": "excel_csv_export",
+      "description": "Write a sheet (or range) to a CSV file. Cross-platform."
+    },
+    {
+      "name": "excel_find_replace",
+      "description": "Find and replace text across one sheet or the entire workbook. Supports plain or regex patterns and case sensitivity. Use `dryRun: true` to preview matches before applying. Returns a list of changes (capped at 100). Cross-platform."
+    },
+    {
+      "name": "excel_get_conditional_formats",
+      "description": "Read all conditional formatting rules on a sheet — type, ranges, conditions, styles, color scales, icon sets. Use this to audit or replicate CF setups across workbooks. File-mode, cross-platform."
+    },
+    {
+      "name": "excel_list_data_validations",
+      "description": "List ALL data validation rules on a sheet (vs excel_get_data_validation_info which is single-cell). Returns range, type, formulas, error/prompt messages."
+    },
+    {
+      "name": "excel_get_sheet_protection",
+      "description": "Read the current protection state of a sheet — protected? what is allowed? File-mode, cross-platform."
+    },
+    {
+      "name": "excel_get_display_options",
+      "description": "Read the current display state of a sheet: gridlines, row/column headers, zoom, freeze pane location, tab color, RTL, active cell. File-mode."
+    },
+    {
+      "name": "excel_get_workbook_properties",
+      "description": "Read workbook-level metadata: creator, last modified by, created/modified dates, title, subject, keywords, category, description, company, manager."
+    },
+    {
+      "name": "excel_set_workbook_properties",
+      "description": "Set workbook-level metadata (any subset of: creator, lastModifiedBy, title, subject, keywords, category, description, company, manager)."
+    },
+    {
+      "name": "excel_get_hyperlinks",
+      "description": "List every cell with a hyperlink on a sheet, with cell address, display text, target URL, and tooltip. File-mode."
+    },
+    {
+      "name": "excel_sort",
+      "description": "Sort a range by one or more columns (multi-key sort). Each key is {column: <letter or number>, order: \"asc\"|\"desc\"}. Optionally hold the first row as a header. File-mode."
+    },
+    {
+      "name": "excel_set_auto_filter",
+      "description": "Turn on Excel auto-filter on a range (the dropdown arrows in the header row). Coworkers can then filter interactively in Excel. File-mode."
+    },
+    {
+      "name": "excel_clear_auto_filter",
+      "description": "Remove the auto-filter from a sheet."
+    },
+    {
+      "name": "excel_remove_duplicates",
+      "description": "Remove duplicate rows from a range. Optionally specify which columns define uniqueness (default: all columns in the range). File-mode."
+    },
+    {
+      "name": "excel_paste_special",
+      "description": "Paste-special: copy a range to a target cell with one of four modes: \"values\" (formulas → results), \"formulas\" (copy formulas as-is), \"formats\" (style only), \"transpose\" (rows ↔ columns)."
+    },
+    {
+      "name": "excel_set_sheet_visibility",
+      "description": "Hide or show a sheet. State: \"visible\", \"hidden\" (user can unhide via menu), or \"veryHidden\" (only this tool or VBA can re-show). Refuses to hide the last visible sheet."
+    },
+    {
+      "name": "excel_list_sheet_visibility",
+      "description": "List every sheet with its visibility state (visible/hidden/veryHidden). Useful to find hidden sheets in a workbook you didn't author."
+    },
+    {
+      "name": "excel_hide_rows",
+      "description": "Hide (or unhide with hidden:false) one or more contiguous rows. Use for collapsing detail in dashboards."
+    },
+    {
+      "name": "excel_hide_columns",
+      "description": "Hide (or unhide with hidden:false) one or more contiguous columns. Accepts column letters or 1-based numbers."
+    },
+    {
+      "name": "excel_add_hyperlink",
+      "description": "Add a hyperlink to a cell. Target can be a URL, mailto:, or an internal sheet reference like \"Sheet2!A1\". Auto-styles as blue underline. File-mode."
+    },
+    {
+      "name": "excel_remove_hyperlink",
+      "description": "Remove the hyperlink from a cell. Optionally keep the display text (keepText:true, default) or clear the cell entirely (keepText:false)."
+    },
+    {
+      "name": "excel_add_sparkline",
+      "description": "Add an Excel sparkline group to a worksheet. Sparklines are tiny in-cell charts (line/column/winLoss). dataRange is the source data (\"A1:A10\" or \"Sheet2!A1:A10\"); locationRange is where the sparkline(s) render — single cell (\"B1\") for one sparkline covering the whole data range, or a multi-cell range (\"B1:B5\") to slice the data row-by-row or column-by-column. Optional color (hex), negativeColor, markers, high/low/first/last point highlighting. File-mode (works without Excel running). Bypasses ExcelJS by editing the worksheet OOXML <extLst> directly."
+    },
+    {
+      "name": "excel_remove_sparklines",
+      "description": "Remove sparklines from a worksheet. With locationRange, removes only the sparklines in matching cells; without it, removes every sparkline group on the sheet. File-mode."
+    },
+    {
+      "name": "excel_get_page_setup",
+      "description": "Read the page setup of a sheet: orientation, paper size, margins, scale/fit, print area, print titles, header/footer text. File-mode."
+    },
+    {
+      "name": "excel_set_page_setup",
+      "description": "Configure page setup: orientation (portrait/landscape), paperSize (1=Letter, 9=A4), fitToPage + fitToWidth/fitToHeight, scale (10-400%), printArea (e.g., A1:M50), printTitlesRow/Column for repeat-on-every-page, margins, headerFooter (oddHeader/oddFooter etc.). File-mode."
+    },
+    {
+      "name": "excel_export_pdf",
+      "description": "Export a workbook (or one sheet, or a range) to PDF. Requires Excel to be running with the file open. Windows: COM ExportAsFixedFormat. macOS: AppleScript \"save as PDF\". Linux: not supported (use LibreOffice CLI separately)."
+    },
+    {
+      "name": "excel_add_shape",
+      "description": "Add a shape to a worksheet — rectangles, rounded rectangles, ovals with fills, gradients, shadows, borders, and text. This is the key tool for DASHBOARD CARD LAYOUTS — the technique that makes Excel look like a designed application instead of a spreadsheet.\n\nDASHBOARD CARD PATTERN: Use roundedRectangle shapes as card containers. Place them over the cell grid to create visual sections. Each card typically has: dark fill (#1E3247 or #283D52), no border (line.visible: false), subtle shadow (blur: 8, transparency: 0.7), and white bold text for the card title.\n\nPOSITIONING: Values are in points (1 inch = 72 points). A typical column is ~48-64 points wide. Row height ~15 points. For a card starting at column B row 3: left≈64, top≈45.\n\nCOMBINE WITH excel_set_display_options (hide gridlines) + excel_batch_format (format data cells beneath/beside shapes) for full dashboard designs."
+    },
+    {
+      "name": "excel_find_formula_errors",
+      "description": "Scan all (or one) sheets for cells containing Excel error values (#DIV/0!, #REF!, #N/A, #VALUE!, #NAME?, #NULL!, #NUM!). Returns each error cell with its sheet, address, formula (if any), and error type. File-mode."
+    },
+    {
+      "name": "excel_find_circular_references",
+      "description": "Best-effort circular reference detection across the whole workbook. Flags cells whose formula references themselves directly OR via a one-hop transitive cycle. Returns each offender with its formula and resolved referenced cells. File-mode."
+    },
+    {
+      "name": "excel_workbook_stats",
+      "description": "Workbook-wide stats for health-check / \"why is this file 50MB?\" debugging. Returns totals (sheets, cells, formulas, merged ranges, named ranges, conditional formats, data validations, hyperlinks, images, charts, tables), file size in bytes, and a per-sheet breakdown with cells, formulas, and a size-contribution metric. File-mode."
+    },
+    {
+      "name": "excel_list_formulas",
+      "description": "Inventory every formula on a sheet. Returns each cell address, formula text, and cached result (when available). Optional filter: \"all\" (default), \"array\" (array formulas), \"shared\" (shared formula cells). Use maxResults to cap output on huge sheets."
+    },
+    {
+      "name": "excel_trace_precedents",
+      "description": "Best-effort one-level precedent trace for a single cell. Parses the cell formula, extracts referenced cells/ranges (cross-sheet aware), and returns each precedent with its current value and (if it is itself a formula) its formula text. Depth is capped at 1 to avoid runaway transitive walks."
+    },
+    {
+      "name": "excel_create_modern_chart",
+      "description": "Create a modern Excel 2016+ chart: waterfall, funnel, treemap, sunburst, histogram, or boxWhisker (box plot). Live mode only — requires Excel running on Windows with the file open. On macOS, use Microsoft Office Scripts in Excel for the Web. After creation, use excel_style_chart to refine colors/axes/legend. DESIGN RULES: No 3D effects. Title 11pt bold #424242. Use brand colors (#1E3247 navy, #00BCD4 cyan, #009688 teal). Treemap/sunburst: hide legend by default and rely on segment labels. Waterfall: keep the auto-coloring (positive/negative/total). Histogram: do not pre-bin the data — let Excel auto-bin."
+    },
+    {
+      "name": "excel_create_combo_chart",
+      "description": "Create a combo chart that mixes a clustered column series with a line series on the same plot. Optionally plot the secondary series on a secondary value axis (useful when the two series live on very different scales — e.g., revenue $$$ + growth %). Live mode only — requires Excel running on Windows. Pass each series as { dataRange, type: \"column\"|\"line\", color?, useSecondaryAxis? }. Use excel_style_chart afterward to fine-tune titles, axes, gridlines, and legend."
+    },
+    {
+      "name": "excel_list_charts",
+      "description": "Enumerate native charts (ChartObjects) on a sheet, or all sheets if sheetName is omitted. Returns name, 1-based index, sheet, chartType (translated from xlChartType), position {left, top, width, height in points}, seriesCount, hasTitle, titleText, and the SeriesCollection(1).Formula as dataRange. Live mode only — Excel must be running with the file open. There is no file-mode equivalent because ExcelJS does not preserve real chart definitions. Pair with excel_get_chart for full per-chart detail or excel_style_chart to modify the chart you found."
+    },
+    {
+      "name": "excel_get_chart",
+      "description": "Read full detail for one chart on a specific sheet, looked up by either chartIndex (1-based) or chartName. Returns chartType, position, title {visible, text, fontSize, fontColor}, axes.category and axes.value (numberFormat, fontSize, fontColor, min, max, hasMajorGridlines), legend {visible, positionId, fontSize, fontColor}, plotArea.fillColor, chartArea.fillColor + borderVisible, and series[] with index, name, formula, color (hex), chartType, hasDataLabels. Colors come back as #RRGGBB hex. Live mode only."
+    },
+    {
+      "name": "excel_list_pivot_tables",
+      "description": "Enumerate PivotTables on a sheet (or all sheets if sheetName is omitted). Returns name, sheet, sourceData, parsed sourceSheet + sourceRange, targetCell (TableRange1.Address), rowFields[], columnFields[], dataFields[] (each with name, sourceField, function — translated from xlConsolidationFunction), and filterFields[]. Live mode only — ExcelJS does not preserve PivotTable definitions."
+    },
+    {
+      "name": "excel_list_shapes",
+      "description": "Enumerate shapes (rectangles, ovals, text boxes, pictures, etc.) on a sheet, or all sheets if sheetName is omitted. Returns name, type (translated from msoShapeType), sheet, position {left, top, width, height in points}, hasText + text, fillColor (hex #RRGGBB), and lineVisible. Useful for inspecting dashboard card layouts created with excel_add_shape. Live mode only — ExcelJS does not preserve shape attributes faithfully."
     }
   ],
   "tools_generated": false,
   "prompts": [],
   "prompts_generated": false,
   "user_config": {
+    "allowedDirectories": {
+      "type": "directory",
+      "title": "Allowed Directories",
+      "description": "Folders this server is allowed to read from and write to. Defaults to your Documents, Desktop, and Downloads folders. Add more (e.g., a project folder) to expand access.",
+      "multiple": true,
+      "required": false
+    },
     "createBackupByDefault": {
       "type": "boolean",
       "title": "Create Backup by Default",
-      "description": "Automatically create backup files before modifying Excel files",
+      "description": "Automatically create .backup copies before modifying any Excel file. Recommended off for active workbooks (clutters your folder); on for one-off scripts.",
       "default": false,
       "required": false
     },
     "defaultResponseFormat": {
       "type": "string",
       "title": "Default Response Format",
-      "description": "Default format for responses (json or markdown)",
+      "description": "Format for read-tool responses when not explicitly set. \"json\" is best for tool-chaining; \"markdown\" is more readable for chat.",
       "default": "json",
       "required": false
     }
