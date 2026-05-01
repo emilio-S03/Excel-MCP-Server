@@ -3,6 +3,30 @@ MIT License
 Copyright (c) 2025 sbraind (original Excel MCP Server — github.com/sbraind/Experimentos)
 Copyright (c) 2026 Emilio Soria (v3.x cross-platform fork — github.com/emilio-S03/Excel-MCP-Server)
 
+------------------------------------------------------------------------------
+Good-faith reliance notice (added by the v3.x fork maintainer)
+
+At the time this fork was created and published (April 2026), the upstream
+repository at github.com/sbraind/Experimentos did not contain a LICENSE file.
+However, the upstream project unambiguously declared its license as MIT in
+two binding places:
+
+  1. The "license" field in upstream package.json:  "license": "MIT"
+  2. The MIT badge in upstream README.md
+
+This fork was created in good-faith reliance on those declarations. The
+upstream author is credited prominently in:
+
+  - The Copyright line above
+  - README.md (top-of-file attribution callout + Links section)
+  - package.json contributors[] field
+
+If the upstream author wishes to clarify, restrict, or add additional
+conditions to the license terms, the maintainer of this fork commits to
+honoring those terms promptly. Please open an issue at
+https://github.com/emilio-S03/Excel-MCP-Server/issues to make contact.
+------------------------------------------------------------------------------
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
