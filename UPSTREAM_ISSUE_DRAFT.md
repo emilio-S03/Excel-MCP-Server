@@ -26,15 +26,19 @@ I credited you prominently in three places (README top-of-file callout,
 README links section, package.json contributors[]) and added a joint-
 copyright LICENSE file to my fork.
 
-While preparing the fork, I noticed your repo declares the license as MIT
-in two places — the badge in README.md and `"license": "MIT"` in
-package.json — but doesn't currently include an actual LICENSE file at the
-repo root.
+While preparing the fork, I noticed something small that's probably worth
+fixing: your README's License section says **"MIT - See LICENSE for details"**,
+but there's no LICENSE file in the repo root yet. The MIT intent is clear
+from three places (the badge, the `"license": "MIT"` in package.json, and
+the README's own reference to a LICENSE file), but the file itself is
+missing.
 
 Would you mind adding a standard MIT LICENSE file with your copyright? It
-would make the license grant unambiguous for anyone forking, packaging
-(.mcpb bundles), or reviewing the project (Soracom InfoSec, in my case,
-flagged that the README badge alone isn't a legally binding grant).
+would close the loop on what the README already promises and make the
+grant unambiguous for forkers, packagers (.mcpb bundles), and corporate
+reviewers (Soracom InfoSec flagged that even though intent is clear, the
+README pointer to a non-existent LICENSE file is a documentation bug worth
+fixing on the upstream side).
 
 Happy to open a PR with a standard MIT template pre-filled with your
 copyright — just let me know if you'd prefer that, or you can do it

@@ -9,12 +9,19 @@ Good-faith reliance notice (added by the v3.x fork maintainer)
 At the time this fork was created and published (April 2026), the upstream
 repository at github.com/sbraind/excel-mcp-server did not contain a LICENSE
 file. However, the upstream project unambiguously declared its license as
-MIT in two binding places:
+MIT and explicitly invited derivative work, in three binding places:
 
   1. The "license" field in upstream package.json:  "license": "MIT"
   2. The MIT badge in upstream README.md
+  3. The upstream README "License" section reads:
+        "MIT - See LICENSE for details."
+     and the "Contributing" section explicitly invites forks:
+        "Contributions are welcome! ... Fork the repository ..."
 
-This fork was created in good-faith reliance on those declarations. The
+This fork was created in good-faith reliance on those declarations.
+The fact that the LICENSE file referenced in the README does not actually
+exist on disk appears to be an upstream documentation bug, not a
+withdrawal of the license grant. The
 upstream author is credited prominently in:
 
   - The Copyright line above
