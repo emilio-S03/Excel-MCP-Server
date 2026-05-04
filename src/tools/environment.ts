@@ -206,6 +206,11 @@ const FILE_MODE_TOOLS = [
   // formula auditing & workbook health-check
   'excel_find_formula_errors', 'excel_find_circular_references', 'excel_workbook_stats',
   'excel_list_formulas', 'excel_trace_precedents',
+  // v3.3 — Tier A bulk-operation tools (file-mode)
+  'excel_get_cell_styles_bulk', 'excel_batch_write_formulas', 'excel_create_named_range_bulk',
+  // Tier B diagnostic tools (file-mode)
+  'excel_dependency_graph', 'excel_compare_sheets', 'excel_validate_named_range_targets',
+  'excel_get_calculation_chain',
 ];
 
 export async function checkEnvironment(): Promise<string> {
@@ -251,7 +256,7 @@ export async function checkEnvironment(): Promise<string> {
   const report: EnvironmentReport = {
     platform: plat,
     nodeVersion: process.version,
-    serverVersion: "3.2.0",
+    serverVersion: "3.3.0",
     excel,
     ...(vbaTrust ? { vbaTrust } : {}),
     ...(automationPermission ? { automationPermission } : {}),

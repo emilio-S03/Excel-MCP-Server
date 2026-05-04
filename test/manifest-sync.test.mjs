@@ -18,7 +18,7 @@ test('manifest.json matches actual tool registrations', () => {
 
 test('manifest declares the v3 user_config schema', () => {
   const manifest = JSON.parse(readFileSync(join(repoRoot, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '3.2.0');
+  assert.equal(manifest.version, '3.3.0');
   assert.ok(manifest.user_config.allowedDirectories, 'should declare allowedDirectories');
   assert.equal(manifest.user_config.allowedDirectories.type, 'directory');
   assert.equal(manifest.user_config.allowedDirectories.multiple, true);

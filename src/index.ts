@@ -72,6 +72,17 @@ import {
   listFormulas,
   tracePrecedents,
 } from './tools/audit.js';
+import {
+  getCellStylesBulk,
+  batchWriteFormulas,
+  createNamedRangeBulk,
+} from './tools/bulk.js';
+import {
+  dependencyGraph,
+  compareSheets,
+  validateNamedRangeTargets,
+  getCalculationChain,
+} from './tools/tier-b.js';
 
 import { TOOL_ANNOTATIONS } from './constants.js';
 import * as schemas from './schemas/index.js';
@@ -219,13 +230,25 @@ const toolSchemas: Record<string, any> = {
   excel_get_chart: schemas.getChartSchema,
   excel_list_pivot_tables: schemas.listPivotTablesSchema,
   excel_list_shapes: schemas.listShapesSchema,
+  // Tier A bulk-operation tools (v3.3)
+  excel_get_cell_styles_bulk: schemas.getCellStylesBulkSchema,
+  excel_batch_write_formulas: schemas.batchWriteFormulasSchema,
+  excel_create_named_range_bulk: schemas.createNamedRangeBulkSchema,
+  excel_screenshot: schemas.screenshotSchema,
+  // Tier B diagnostic tools
+  excel_dependency_graph: schemas.dependencyGraphSchema,
+  excel_compare_sheets: schemas.compareSheetsSchema,
+  excel_validate_named_range_targets: schemas.validateNamedRangeTargetsSchema,
+  excel_get_calculation_chain: schemas.getCalculationChainSchema,
+  // Tier C — merged-cell-aware reads
+  excel_read_sheet_merged_aware: schemas.readSheetMergedAwareSchema,
 };
 
 // Create server instance
 const server = new Server(
   {
     name: 'excel-mcp-server',
-    version: '3.2.0',
+    version: '3.3.0',
   },
   {
     capabilities: {
@@ -245,7 +268,7 @@ server.setRequestHandler(InitializeRequestSchema, async () => {
     },
     serverInfo: {
       name: 'excel-mcp-server',
-      version: '3.2.0',
+      version: '3.3.0',
     },
   };
 });
@@ -1967,6 +1990,151 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
         annotations: TOOL_ANNOTATIONS.READ_ONLY,
       },
+
+      // ============================================================
+      // Tier A bulk-operation tools (v3.3) — atomic multi-cell ops
+      // ============================================================
+      {
+        name: 'excel_get_cell_styles_bulk',
+        description: 'Read formatting (font, fill, border, alignment, numFmt) for an entire range in one call. ExcelJS file-mode. Returns one entry per cell with {address, font, fill, border, alignment, numFmt, hasValue}. Skips cells with no value AND no style unless includeEmpty is true. Use this instead of N round-trips of excel_format_cell when auditing existing formatting.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Name of the sheet' },
+            range: { type: 'string', description: 'Range to inspect (e.g., A1:D10)' },
+            includeEmpty: { type: 'boolean', default: false, description: 'Include cells with no value and no style (default: false).' },
+          },
+          required: ['filePath', 'sheetName', 'range'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_batch_write_formulas',
+        description: 'Atomic bulk formula write (ExcelJS file-mode). Validates every {cell, formula} entry up-front; if any entry is malformed (bad cell address, empty formula, unbalanced parens), the entire batch is rejected before anything is written. Single load → batch apply → single save. Much faster than N calls to excel_set_formula.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Name of the sheet' },
+            formulas: {
+              type: 'array',
+              description: 'Array of {cell, formula} entries. Validated transactionally — one bad entry rejects the whole batch.',
+              items: {
+                type: 'object',
+                properties: {
+                  cell: { type: 'string', description: 'Cell address (e.g., A1)' },
+                  formula: { type: 'string', description: 'Excel formula (with or without leading =)' },
+                },
+                required: ['cell', 'formula'],
+              },
+            },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'sheetName', 'formulas'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_create_named_range_bulk',
+        description: 'Create N named ranges in one call (ExcelJS file-mode). Validates all {name, sheetName, range} entries up-front (identifier syntax, range syntax, sheet existence) before applying any. Single load → batch apply via workbook.definedNames.add → single save. Transactional: any invalid entry rejects the entire batch.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            names: {
+              type: 'array',
+              description: 'Array of named ranges to create. Validated transactionally.',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', description: 'Named-range identifier (letters/digits/underscore/dot, must start with letter or underscore)' },
+                  sheetName: { type: 'string', description: 'Sheet that the range lives on' },
+                  range: { type: 'string', description: 'Cell or range (e.g., A1 or A1:D10)' },
+                },
+                required: ['name', 'sheetName', 'range'],
+              },
+            },
+            createBackup: { type: 'boolean', default: false },
+          },
+          required: ['filePath', 'names'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_screenshot',
+        description: 'Capture a screenshot of a sheet or range as PNG (live mode only — Excel must be running with the file open). Thin alias for excel_capture_screenshot with the same args. On Windows uses COM via PowerShell; on macOS uses AppleScript. Output written to outputPath as PNG.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file (must be open in Excel)' },
+            sheetName: { type: 'string', description: 'Name of the sheet to capture' },
+            outputPath: { type: 'string', description: 'File path to save the PNG' },
+            range: { type: 'string', description: 'Optional range to capture (e.g., A1:D10). Omit for the used range.' },
+          },
+          required: ['filePath', 'sheetName', 'outputPath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+
+      // ============================================================
+      // Tier B diagnostic tools (file-mode, cross-platform)
+      // ============================================================
+      {
+        name: 'excel_dependency_graph',
+        description: 'Build the full formula dependency graph for a workbook. Walks every cell, parses formulas (cell, range, and sheet-qualified refs like Sheet1!A1 or \'My Sheet\'!A1:B2), and returns {totalNodes, totalEdges, nodes:[{cell, sheet, formula, refsTo, refsFrom}], cyclic:[]}. refsTo/refsFrom are qualified as "Sheet!Addr". When format="mermaid", also returns a Mermaid `graph TD` diagram capped at 100 edges. Pair with excel_trace_precedents for one-cell drill-down.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Limit graph origins to formulas on this sheet (default: every sheet).' },
+            format: { type: 'string', enum: ['json', 'mermaid'], default: 'json', description: 'Output format. "mermaid" appends a Mermaid graph (capped at 100 edges).' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_compare_sheets',
+        description: 'Structural diff between two sheets — same workbook OR across two workbooks. Returns {summary:{addedCells, removedCells, changedCells, formulasChanged}, differences:[{address, side, leftValue?, rightValue?, leftFormula?, rightFormula?}], truncated}. Difference list is capped at 500 entries (truncated:true when more exist). side is "left-only" / "right-only" / "both-changed". Both file paths are validated against the allowed-directories sandbox.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            leftFile: { type: 'string', description: 'Path to the "left" workbook' },
+            leftSheet: { type: 'string', description: 'Sheet name in the left workbook' },
+            rightFile: { type: 'string', description: 'Path to the "right" workbook (may be the same as leftFile)' },
+            rightSheet: { type: 'string', description: 'Sheet name in the right workbook' },
+            includeValues: { type: 'boolean', default: true, description: 'Include leftValue/rightValue in diff entries.' },
+            includeFormulas: { type: 'boolean', default: true, description: 'Include leftFormula/rightFormula in diff entries.' },
+          },
+          required: ['leftFile', 'leftSheet', 'rightFile', 'rightSheet'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_validate_named_range_targets',
+        description: 'Audit every named range in a workbook for invalid targets. Flags names whose target sheet does not exist, whose range is outside Excel\'s hard bounds (1,048,576 rows × 16,384 cols), or whose target starts beyond the sheet\'s used row/column count (likely shifted/deleted area). Returns {totalNames, validCount, invalidCount, invalid:[{name, formula, reason}]}.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_get_calculation_chain',
+        description: 'Read xl/calcChain.xml from inside the .xlsx zip part. Each entry is the next cell Excel needs to recalculate; the chain reflects formula precedence order. Returns {totalEntries, chain:[{cell, sheetId, sheetName}]}. If xl/calcChain.xml is missing (Excel hasn\'t recalculated this file yet, or the file was never opened in Excel), returns {totalEntries:0, chain:[], note:"..."}.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
     ],
   };
 });
@@ -2687,6 +2855,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case 'excel_list_shapes':
         result = await listShapes(validatedArgs.filePath, validatedArgs.sheetName);
+        break;
+
+      // Tier A bulk-operation tools (v3.3)
+      case 'excel_get_cell_styles_bulk':
+        result = await getCellStylesBulk(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.range,
+          validatedArgs.includeEmpty
+        );
+        break;
+      case 'excel_batch_write_formulas':
+        result = await batchWriteFormulas(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.formulas,
+          validatedArgs.createBackup
+        );
+        break;
+      case 'excel_create_named_range_bulk':
+        result = await createNamedRangeBulk(
+          validatedArgs.filePath,
+          validatedArgs.names,
+          validatedArgs.createBackup
+        );
+        break;
+      case 'excel_screenshot':
+        result = await captureScreenshot(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.outputPath,
+          validatedArgs.range
+        );
+        break;
+
+      // Tier B diagnostic tools
+      case 'excel_dependency_graph':
+        result = await dependencyGraph(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          validatedArgs.format
+        );
+        break;
+      case 'excel_compare_sheets':
+        result = await compareSheets(
+          validatedArgs.leftFile,
+          validatedArgs.leftSheet,
+          validatedArgs.rightFile,
+          validatedArgs.rightSheet,
+          {
+            includeValues: validatedArgs.includeValues,
+            includeFormulas: validatedArgs.includeFormulas,
+          }
+        );
+        break;
+      case 'excel_validate_named_range_targets':
+        result = await validateNamedRangeTargets(validatedArgs.filePath);
+        break;
+      case 'excel_get_calculation_chain':
+        result = await getCalculationChain(validatedArgs.filePath);
         break;
 
       default:

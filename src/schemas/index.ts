@@ -1025,3 +1025,95 @@ export const listShapesSchema = z.object({
   filePath: filePathSchema.describe('Path to the .xlsx (must be open in Excel)'),
   sheetName: sheetNameSchema.optional().describe('Limit to one sheet (default: scan all sheets)'),
 });
+
+// =============================================================================
+// Tier A bulk-operation tools (v3.3) — atomic multi-cell ops via ExcelJS
+// =============================================================================
+
+export const getCellStylesBulkSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  range: rangeSchema.describe('Range to inspect (e.g., A1:D10)'),
+  includeEmpty: z.boolean().optional().default(false)
+    .describe('If false (default), skip cells that have no value AND no style.'),
+});
+
+export const batchWriteFormulasSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  formulas: z.array(z.object({
+    cell: cellAddressSchema,
+    formula: z.string().min(1).describe('Excel formula (with or without leading =)'),
+  })).min(1).describe('Array of {cell, formula} entries to write atomically. ' +
+    'All entries are validated up-front; any invalid entry rejects the entire batch.'),
+  createBackup: z.boolean().default(false),
+});
+
+export const createNamedRangeBulkSchema = z.object({
+  filePath: filePathSchema,
+  names: z.array(z.object({
+    name: z.string().min(1).regex(/^[A-Za-z_][A-Za-z0-9_.]*$/,
+      'Named-range identifier must start with a letter/underscore and contain only alphanumerics, underscores, dots'),
+    sheetName: sheetNameSchema,
+    range: z.string().regex(/^[A-Z]+\d+(:[A-Z]+\d+)?$/, 'Invalid range (e.g., A1 or A1:D10)'),
+  })).min(1).describe('Array of {name, sheetName, range} entries to create atomically. ' +
+    'All entries validated first; any invalid entry rejects the entire batch.'),
+  createBackup: z.boolean().default(false),
+});
+
+// excel_screenshot — alias for excel_capture_screenshot with the same args.
+export const screenshotSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  outputPath: z.string().describe('File path to save the screenshot PNG'),
+  range: rangeSchema.optional().describe('Optional range to capture. If omitted, captures the used range.'),
+});
+
+// =============================================================================
+// Tier B diagnostic tools (file-mode, cross-platform)
+// =============================================================================
+
+export const dependencyGraphSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema.optional()
+    .describe('Limit graph origins to formulas on this sheet (default: every sheet).'),
+  format: z.enum(['json', 'mermaid']).optional().default('json')
+    .describe('Output format. "mermaid" appends a Mermaid `graph TD` diagram (capped at 100 edges).'),
+});
+
+export const compareSheetsSchema = z.object({
+  leftFile: filePathSchema.describe('Path to the "left" workbook'),
+  leftSheet: sheetNameSchema.describe('Sheet name in the left workbook'),
+  rightFile: filePathSchema.describe('Path to the "right" workbook (may be the same file as leftFile)'),
+  rightSheet: sheetNameSchema.describe('Sheet name in the right workbook'),
+  includeValues: z.boolean().optional().default(true)
+    .describe('Include leftValue/rightValue in the diff entries (default: true).'),
+  includeFormulas: z.boolean().optional().default(true)
+    .describe('Include leftFormula/rightFormula in the diff entries (default: true).'),
+});
+
+export const validateNamedRangeTargetsSchema = z.object({
+  filePath: filePathSchema,
+});
+
+export const getCalculationChainSchema = z.object({
+  filePath: filePathSchema,
+});
+
+// =============================================================================
+// excel_read_sheet_merged_aware — read with merged-cell awareness
+// =============================================================================
+// Reads a sheet/range like excel_read_sheet but post-processes merged regions
+// so iterating the returned 2D array does not yield mysterious empty cells.
+// File-mode, cross-platform.
+
+export const readSheetMergedAwareSchema = z.object({
+  filePath: filePathSchema,
+  sheetName: sheetNameSchema,
+  range: rangeSchema.optional().describe('Optional range to read (e.g., A1:D10). Defaults to the used range.'),
+  fillMerged: z.boolean().optional().default(true)
+    .describe('When true (default), every cell in a merged range is populated with the top-left value so iterating the array does not return empty cells.'),
+  includeMergedMetadata: z.boolean().optional().default(false)
+    .describe('When true, also returns mergedCells: [{topLeft, range, value}] describing every merged region intersecting the read window.'),
+  responseFormat: responseFormatSchema,
+});

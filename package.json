@@ -1,7 +1,7 @@
 {
   "name": "excel-mcp-pro",
-  "version": "3.2.0",
-  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 96 tools, cross-platform.",
+  "version": "3.3.0",
+  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 104 tools, cross-platform.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -16,7 +16,7 @@
     "pack:mcpb": "npm run build && npm run manifest:generate && npx -y @anthropic-ai/mcpb pack .",
     "manifest:generate": "node scripts/generate-manifest.mjs",
     "manifest:check": "node scripts/generate-manifest.mjs --check",
-    "test": "node --test test/manifest-sync.test.mjs test/sandbox.test.mjs test/smoke.test.mjs test/v31.test.mjs test/sparklines.test.mjs test/audit.test.mjs test/modern-charts.test.mjs test/live-inspections.test.mjs",
+    "test": "node --test test/manifest-sync.test.mjs test/sandbox.test.mjs test/smoke.test.mjs test/v31.test.mjs test/sparklines.test.mjs test/audit.test.mjs test/modern-charts.test.mjs test/live-inspections.test.mjs test/tier-a.test.mjs test/tier-b.test.mjs",
     "test:smoke": "node --test test/smoke.test.mjs",
     "test:sandbox": "node --test test/sandbox.test.mjs",
     "test:manifest": "node --test test/manifest-sync.test.mjs",

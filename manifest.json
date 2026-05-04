@@ -1,9 +1,9 @@
 {
   "dxt_version": "0.1",
   "name": "excel-mcp-server",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "display_name": "Excel MCP Server",
-  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 96 tools, cross-platform.",
+  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 104 tools, cross-platform.",
   "long_description": "A powerful Model Context Protocol (MCP) server for working with Excel files. Provides comprehensive tools for reading, writing, formatting, analyzing Excel spreadsheets, creating charts, pivot tables, conditional formatting, and much more. Built with TypeScript and ExcelJS for maximum reliability and type safety.",
   "author": {
     "name": "Excel MCP Server Team"
@@ -438,6 +438,38 @@
     {
       "name": "excel_list_shapes",
       "description": "Enumerate shapes (rectangles, ovals, text boxes, pictures, etc.) on a sheet, or all sheets if sheetName is omitted. Returns name, type (translated from msoShapeType), sheet, position {left, top, width, height in points}, hasText + text, fillColor (hex #RRGGBB), and lineVisible. Useful for inspecting dashboard card layouts created with excel_add_shape. Live mode only — ExcelJS does not preserve shape attributes faithfully."
+    },
+    {
+      "name": "excel_get_cell_styles_bulk",
+      "description": "Read formatting (font, fill, border, alignment, numFmt) for an entire range in one call. ExcelJS file-mode. Returns one entry per cell with {address, font, fill, border, alignment, numFmt, hasValue}. Skips cells with no value AND no style unless includeEmpty is true. Use this instead of N round-trips of excel_format_cell when auditing existing formatting."
+    },
+    {
+      "name": "excel_batch_write_formulas",
+      "description": "Atomic bulk formula write (ExcelJS file-mode). Validates every {cell, formula} entry up-front; if any entry is malformed (bad cell address, empty formula, unbalanced parens), the entire batch is rejected before anything is written. Single load → batch apply → single save. Much faster than N calls to excel_set_formula."
+    },
+    {
+      "name": "excel_create_named_range_bulk",
+      "description": "Create N named ranges in one call (ExcelJS file-mode). Validates all {name, sheetName, range} entries up-front (identifier syntax, range syntax, sheet existence) before applying any. Single load → batch apply via workbook.definedNames.add → single save. Transactional: any invalid entry rejects the entire batch."
+    },
+    {
+      "name": "excel_screenshot",
+      "description": "Capture a screenshot of a sheet or range as PNG (live mode only — Excel must be running with the file open). Thin alias for excel_capture_screenshot with the same args. On Windows uses COM via PowerShell; on macOS uses AppleScript. Output written to outputPath as PNG."
+    },
+    {
+      "name": "excel_dependency_graph",
+      "description": "Build the full formula dependency graph for a workbook. Walks every cell, parses formulas (cell, range, and sheet-qualified refs like Sheet1!A1 or 'My Sheet'!A1:B2), and returns {totalNodes, totalEdges, nodes:[{cell, sheet, formula, refsTo, refsFrom}], cyclic:[]}. refsTo/refsFrom are qualified as \"Sheet!Addr\". When format=\"mermaid\", also returns a Mermaid `graph TD` diagram capped at 100 edges. Pair with excel_trace_precedents for one-cell drill-down."
+    },
+    {
+      "name": "excel_compare_sheets",
+      "description": "Structural diff between two sheets — same workbook OR across two workbooks. Returns {summary:{addedCells, removedCells, changedCells, formulasChanged}, differences:[{address, side, leftValue?, rightValue?, leftFormula?, rightFormula?}], truncated}. Difference list is capped at 500 entries (truncated:true when more exist). side is \"left-only\" / \"right-only\" / \"both-changed\". Both file paths are validated against the allowed-directories sandbox."
+    },
+    {
+      "name": "excel_validate_named_range_targets",
+      "description": "Audit every named range in a workbook for invalid targets. Flags names whose target sheet does not exist, whose range is outside Excel's hard bounds (1,048,576 rows × 16,384 cols), or whose target starts beyond the sheet's used row/column count (likely shifted/deleted area). Returns {totalNames, validCount, invalidCount, invalid:[{name, formula, reason}]}."
+    },
+    {
+      "name": "excel_get_calculation_chain",
+      "description": "Read xl/calcChain.xml from inside the .xlsx zip part. Each entry is the next cell Excel needs to recalculate; the chain reflects formula precedence order. Returns {totalEntries, chain:[{cell, sheetId, sheetName}]}. If xl/calcChain.xml is missing (Excel hasn't recalculated this file yet, or the file was never opened in Excel), returns {totalEntries:0, chain:[], note:\"...\"}."
     }
   ],
   "tools_generated": false,

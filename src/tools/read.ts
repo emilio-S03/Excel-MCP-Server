@@ -1,4 +1,4 @@
-import { loadWorkbook, getSheet, cellValueToString, formatDataAsTable, parseRange } from './helpers.js';
+import { loadWorkbook, getSheet, cellValueToString, formatDataAsTable, parseRange, columnNumberToLetter } from './helpers.js';
 import type { WorkbookInfo, SheetInfo, ResponseFormat } from '../types.js';
 
 export async function readWorkbook(filePath: string, responseFormat: ResponseFormat = 'json'): Promise<string> {
@@ -227,4 +227,196 @@ export async function getFormula(
   }
 
   return JSON.stringify(result, null, 2);
+}
+
+// ============================================================
+// excel_read_sheet_merged_aware — read with merged-cell awareness
+// ============================================================
+// File-mode, cross-platform. Same shape as excel_read_sheet but post-
+// processes the cell array so merged regions don't return mysterious
+// empty cells. With fillMerged: true (default) every cell in a merged
+// range is populated with the top-left value. With includeMergedMetadata:
+// true, returns a `mergedCells` array describing each merged region in
+// the read area.
+
+export interface ReadSheetMergedAwareOptions {
+  range?: string;
+  fillMerged?: boolean;
+  includeMergedMetadata?: boolean;
+  responseFormat?: ResponseFormat;
+}
+
+interface MergedRegion {
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
+  topLeft: string;
+  range: string;
+}
+
+function parseMergeRangeString(range: string): { startRow: number; startCol: number; endRow: number; endCol: number } | null {
+  // Accepts "A1:C1" or "A1" (single-cell pseudo-merges).
+  const matchPair = range.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+  if (matchPair) {
+    return {
+      startCol: lettersToNum(matchPair[1]),
+      startRow: parseInt(matchPair[2]),
+      endCol: lettersToNum(matchPair[3]),
+      endRow: parseInt(matchPair[4]),
+    };
+  }
+  const matchOne = range.match(/^([A-Z]+)(\d+)$/);
+  if (matchOne) {
+    const c = lettersToNum(matchOne[1]);
+    const r = parseInt(matchOne[2]);
+    return { startCol: c, startRow: r, endCol: c, endRow: r };
+  }
+  return null;
+}
+
+function lettersToNum(letters: string): number {
+  let n = 0;
+  for (let i = 0; i < letters.length; i++) {
+    n = n * 26 + (letters.charCodeAt(i) - 64);
+  }
+  return n;
+}
+
+function rectsOverlap(
+  a: { startRow: number; startCol: number; endRow: number; endCol: number },
+  b: { startRow: number; startCol: number; endRow: number; endCol: number }
+): boolean {
+  return !(
+    a.endRow < b.startRow ||
+    a.startRow > b.endRow ||
+    a.endCol < b.startCol ||
+    a.startCol > b.endCol
+  );
+}
+
+export async function readSheetMergedAware(
+  filePath: string,
+  sheetName: string,
+  options: ReadSheetMergedAwareOptions = {}
+): Promise<string> {
+  const fillMerged = options.fillMerged !== false; // default true
+  const includeMergedMetadata = options.includeMergedMetadata === true;
+  const fmt = options.responseFormat ?? 'json';
+
+  const workbook = await loadWorkbook(filePath);
+  const sheet = getSheet(workbook, sheetName);
+
+  // Collect merged regions from sheet model (same source as getMergedCells).
+  const allMerges: MergedRegion[] = [];
+  const rawMerges = (sheet.model as any).merges as string[] | undefined;
+  if (rawMerges) {
+    for (const m of rawMerges) {
+      const parsed = parseMergeRangeString(m);
+      if (!parsed) continue;
+      allMerges.push({
+        ...parsed,
+        topLeft: `${columnNumberToLetter(parsed.startCol)}${parsed.startRow}`,
+        range: m,
+      });
+    }
+  }
+
+  // Determine the read window.
+  let startRow: number, startCol: number, endRow: number, endCol: number;
+  if (options.range) {
+    const parsed = parseRange(options.range);
+    startRow = parsed.startRow;
+    startCol = parsed.startCol;
+    endRow = parsed.endRow;
+    endCol = parsed.endCol;
+  } else {
+    startRow = 1;
+    startCol = 1;
+    // Use sheet bounds — fall back to 1x1 if the sheet is empty.
+    endRow = Math.max(1, sheet.rowCount || 1);
+    endCol = Math.max(1, sheet.columnCount || 1);
+  }
+
+  // Build cell value matrix.
+  const data: any[][] = [];
+  for (let r = startRow; r <= endRow; r++) {
+    const row: any[] = [];
+    for (let c = startCol; c <= endCol; c++) {
+      row.push(sheet.getRow(r).getCell(c).value);
+    }
+    data.push(row);
+  }
+
+  // Find merges that intersect the read window.
+  const window = { startRow, startCol, endRow, endCol };
+  const mergesInWindow = allMerges.filter((m) => rectsOverlap(m, window));
+
+  // Fill merged-region cells with the top-left value.
+  if (fillMerged) {
+    for (const m of mergesInWindow) {
+      // Top-left value comes from the actual cell (lives outside window if
+      // the merge starts before the window; we still need the value).
+      const topLeftValue = sheet.getRow(m.startRow).getCell(m.startCol).value;
+      const ir0 = Math.max(m.startRow, startRow);
+      const ir1 = Math.min(m.endRow, endRow);
+      const ic0 = Math.max(m.startCol, startCol);
+      const ic1 = Math.min(m.endCol, endCol);
+      for (let r = ir0; r <= ir1; r++) {
+        for (let c = ic0; c <= ic1; c++) {
+          data[r - startRow][c - startCol] = topLeftValue;
+        }
+      }
+    }
+  }
+
+  const totalRows = endRow - startRow + 1;
+  const totalCols = endCol - startCol + 1;
+
+  // Build merged metadata if requested.
+  let mergedCellsMeta: Array<{ topLeft: string; range: string; value: any }> | undefined;
+  if (includeMergedMetadata) {
+    mergedCellsMeta = mergesInWindow.map((m) => ({
+      topLeft: m.topLeft,
+      range: m.range,
+      value: sheet.getRow(m.startRow).getCell(m.startCol).value,
+    }));
+  }
+
+  if (fmt === 'markdown') {
+    let md = `# Sheet (merged-aware): ${sheetName}\n\n`;
+    if (options.range) md += `**Range**: ${options.range}\n`;
+    md += `**Rows**: ${totalRows}\n`;
+    md += `**Columns**: ${totalCols}\n`;
+    md += `**fillMerged**: ${fillMerged}\n`;
+    md += `**Merged regions in window**: ${mergesInWindow.length}\n\n`;
+    md += '## Data\n\n';
+    md += formatDataAsTable(data.slice(0, 100));
+    if (totalRows > 100) md += `\n\n*Showing first 100 of ${totalRows} rows*`;
+    if (includeMergedMetadata && mergedCellsMeta && mergedCellsMeta.length > 0) {
+      md += `\n\n## Merged Cells\n\n`;
+      const tableData = mergedCellsMeta.map((m, i) => [
+        i + 1,
+        m.range,
+        m.topLeft,
+        cellValueToString(m.value),
+      ]);
+      md += formatDataAsTable(tableData, ['#', 'Range', 'Top-Left', 'Value']);
+    }
+    return md;
+  }
+
+  const out: any = {
+    sheetName,
+    range: options.range,
+    rows: data,
+    rowCount: totalRows,
+    columnCount: totalCols,
+    fillMerged,
+    mergedRegionsInWindow: mergesInWindow.length,
+  };
+  if (includeMergedMetadata) {
+    out.mergedCells = mergedCellsMeta;
+  }
+  return JSON.stringify(out, null, 2);
 }
