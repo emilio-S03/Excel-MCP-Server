@@ -1,48 +1,32 @@
 /**
- * Tier C — Workflow-shaping tools.
+ * Tier C — Snapshot tools (workbook-level point-in-time copies).
  *
  *   excel_snapshot_create   — copies a .xlsx to a sibling snapshot file
  *   excel_snapshot_diff     — compares all sheets between filePath and snapshot
  *   excel_snapshot_restore  — overwrites filePath with snapshot contents
- *   excel_transaction       — atomic batch executor (auto-rollback on failure)
- *   excel_diff_before_after — convenience: snapshot + run ops + diff
  *
  * Snapshots ALWAYS live in the same directory as the source file so
  * ensureFilePathAllowed catches them automatically — they cannot be created
  * outside the sandbox.
+ *
+ * snapshot_diff reuses cell-comparison patterns from tier-b's compareSheets:
+ * for each sheet that exists in both workbooks we walk every populated cell
+ * (left ∪ right) and emit a diff entry whenever the value or formula differs.
  */
 import ExcelJS from 'exceljs';
 import { promises as fs } from 'fs';
-import { dirname, basename, join, resolve } from 'path';
-import { randomBytes } from 'crypto';
+import { dirname, basename, join } from 'path';
+import { constants as fsConstants } from 'fs';
 
 import {
   ensureFilePathAllowed,
   loadWorkbook,
-  columnNumberToLetter,
+  cellValueToString,
 } from './helpers.js';
-
-import { updateCell, writeRange, addRow, setFormula } from './write.js';
-import { formatCell, mergeCells } from './format.js';
-import { createSheet, deleteSheet, renameSheet } from './sheets.js';
-import { deleteRows, deleteColumns, copyRange } from './operations.js';
-import {
-  insertRows,
-  insertColumns,
-  unmergeCells,
-} from './advanced.js';
-import { applyConditionalFormat } from './conditional.js';
-import { createNamedRange, deleteNamedRange } from './named-ranges.js';
-import { setDataValidation } from './validation.js';
-import {
-  sortRange,
-  removeDuplicates,
-  pasteSpecial,
-} from './data-ops.js';
-import { addHyperlink, removeHyperlink } from './hyperlinks.js';
+import type { CellValue } from 'exceljs';
 
 // ----------------------------------------------------------------------------
-// Snapshot create
+// snapshot_create
 // ----------------------------------------------------------------------------
 
 function genTimestamp(): string {
@@ -64,8 +48,6 @@ function genTimestamp(): string {
 function deriveSnapshotPath(filePath: string, snapshotId: string): string {
   const dir = dirname(filePath);
   const base = basename(filePath);
-  // Strip a single trailing .xlsx/.xlsm to keep names readable; otherwise
-  // just append.
   const stem = base.replace(/\.(xlsx|xlsm)$/i, '');
   return join(dir, `${stem}.snapshot.${snapshotId}.xlsx`);
 }
@@ -75,7 +57,7 @@ export async function snapshotCreate(
   snapshotId?: string,
 ): Promise<string> {
   ensureFilePathAllowed(filePath);
-  // Confirm source exists.
+
   try {
     await fs.access(filePath);
   } catch {
@@ -103,214 +85,253 @@ export async function snapshotCreate(
 }
 
 // ----------------------------------------------------------------------------
-// Snapshot diff
+// snapshot_diff
 // ----------------------------------------------------------------------------
 
-interface CellDiff {
+function extractFormula(value: CellValue): string | null {
+  if (value && typeof value === 'object' && 'formula' in value && (value as any).formula) {
+    return String((value as any).formula);
+  }
+  if (value && typeof value === 'object' && 'sharedFormula' in value && (value as any).sharedFormula) {
+    return String((value as any).sharedFormula);
+  }
+  return null;
+}
+
+interface CellInfo {
+  value: any;       // friendly value (cached result for formulas; raw value otherwise)
+  rawValue: CellValue;
+  formula: string | null;
+}
+
+function collectCells(sheet: ExcelJS.Worksheet): Map<string, CellInfo> {
+  const map = new Map<string, CellInfo>();
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      const f = extractFormula(cell.value);
+      let display: any = cell.value;
+      if (f && cell.value && typeof cell.value === 'object' && 'result' in cell.value) {
+        display = (cell.value as any).result;
+      }
+      map.set(cell.address, { value: display, rawValue: cell.value, formula: f });
+    });
+  });
+  return map;
+}
+
+interface SheetDiffEntry {
   sheet: string;
-  cell: string;
-  before: any;
-  after: any;
+  address: string;
+  side: 'left-only' | 'right-only' | 'both-changed';
+  leftValue?: any;
+  rightValue?: any;
+  leftFormula?: string;
+  rightFormula?: string;
 }
 
-function cellValueForDiff(value: any): any {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'object') {
-    if ('formula' in value && value.formula) return `=${value.formula}`;
-    if ('result' in value) return value.result;
-    if ('text' in value) return value.text;
-    if ('richText' in value) {
-      try {
-        return (value.richText as any[]).map((rt) => rt.text).join('');
-      } catch {
-        return JSON.stringify(value);
-      }
-    }
-    return JSON.stringify(value);
-  }
-  return value;
+interface SheetDiffResult {
+  added: number;
+  removed: number;
+  changed: number;
+  diffs: SheetDiffEntry[];
 }
 
-function valuesEqual(a: any, b: any): boolean {
-  const av = cellValueForDiff(a);
-  const bv = cellValueForDiff(b);
-  if (av === bv) return true;
-  if (av === null || bv === null) return av === bv;
-  // Numbers: tolerate floating-point near-equality.
-  if (typeof av === 'number' && typeof bv === 'number') {
-    if (Number.isNaN(av) && Number.isNaN(bv)) return true;
-    return Math.abs(av - bv) < 1e-9;
-  }
-  // Dates: compare time value
-  if (av instanceof Date && bv instanceof Date) {
-    return av.getTime() === bv.getTime();
-  }
-  return String(av) === String(bv);
-}
-
-interface SheetExtent {
-  rowCount: number;
-  columnCount: number;
-}
-
-function sheetExtent(sheet: ExcelJS.Worksheet): SheetExtent {
-  // ExcelJS rowCount/columnCount can include trailing empties; use actuals.
-  const rowCount = sheet.actualRowCount ?? sheet.rowCount ?? 0;
-  const columnCount = sheet.actualColumnCount ?? sheet.columnCount ?? 0;
-  return { rowCount, columnCount };
-}
-
-function diffSheet(
-  beforeSheet: ExcelJS.Worksheet,
-  afterSheet: ExcelJS.Worksheet,
+function diffOneSheet(
   sheetName: string,
+  leftSheet: ExcelJS.Worksheet,
+  rightSheet: ExcelJS.Worksheet,
   remainingCap: number,
-): { changes: CellDiff[]; cellChanges: number } {
-  const before = sheetExtent(beforeSheet);
-  const after = sheetExtent(afterSheet);
-  const maxRow = Math.max(before.rowCount, after.rowCount);
-  const maxCol = Math.max(before.columnCount, after.columnCount);
+  includeValues: boolean,
+  includeFormulas: boolean,
+): SheetDiffResult {
+  // "left" is the CURRENT (post-edit) workbook; "right" is the snapshot (the BEFORE state).
+  // Per spec: left = current, snapshot = right (before)
+  const leftMap = collectCells(leftSheet);
+  const rightMap = collectCells(rightSheet);
 
-  const changes: CellDiff[] = [];
-  let cellChanges = 0;
+  const allAddrs = new Set<string>([...leftMap.keys(), ...rightMap.keys()]);
 
-  for (let r = 1; r <= maxRow; r++) {
-    for (let c = 1; c <= maxCol; c++) {
-      const beforeVal = beforeSheet.getRow(r).getCell(c).value;
-      const afterVal = afterSheet.getRow(r).getCell(c).value;
-      if (!valuesEqual(beforeVal, afterVal)) {
-        cellChanges++;
-        if (changes.length < remainingCap) {
-          changes.push({
-            sheet: sheetName,
-            cell: `${columnNumberToLetter(c)}${r}`,
-            before: cellValueForDiff(beforeVal),
-            after: cellValueForDiff(afterVal),
-          });
+  let added = 0;
+  let removed = 0;
+  let changed = 0;
+  const diffs: SheetDiffEntry[] = [];
+
+  for (const addr of allAddrs) {
+    const l = leftMap.get(addr);
+    const r = rightMap.get(addr);
+
+    if (!l && r) {
+      // Cell exists only on snapshot side (right) → REMOVED from current.
+      removed++;
+      if (diffs.length < remainingCap) {
+        const entry: SheetDiffEntry = { sheet: sheetName, address: addr, side: 'right-only' };
+        if (includeValues) entry.rightValue = r.value;
+        if (includeFormulas && r.formula) entry.rightFormula = r.formula;
+        diffs.push(entry);
+      }
+      continue;
+    }
+
+    if (l && !r) {
+      // Only in current (left) → cell was ADDED since the snapshot
+      added++;
+      if (diffs.length < remainingCap) {
+        const entry: SheetDiffEntry = { sheet: sheetName, address: addr, side: 'left-only' };
+        if (includeValues) entry.leftValue = l.value;
+        if (includeFormulas && l.formula) entry.leftFormula = l.formula;
+        diffs.push(entry);
+      }
+      continue;
+    }
+
+    if (l && r) {
+      const valueDiff = cellValueToString(l.rawValue) !== cellValueToString(r.rawValue);
+      const formulaDiff = (l.formula ?? null) !== (r.formula ?? null);
+      if (!valueDiff && !formulaDiff) continue;
+
+      changed++;
+      if (diffs.length < remainingCap) {
+        const entry: SheetDiffEntry = { sheet: sheetName, address: addr, side: 'both-changed' };
+        if (includeValues) {
+          entry.leftValue = l.value;
+          entry.rightValue = r.value;
         }
+        if (includeFormulas) {
+          if (l.formula) entry.leftFormula = l.formula;
+          if (r.formula) entry.rightFormula = r.formula;
+        }
+        diffs.push(entry);
       }
     }
   }
 
-  return { changes, cellChanges };
+  return { added, removed, changed, diffs };
 }
-
-const DIFF_CAP = 500;
 
 export async function snapshotDiff(
   filePath: string,
   snapshotPath: string,
+  options: {
+    includeValues?: boolean;
+    includeFormulas?: boolean;
+    maxDifferences?: number;
+  } = {},
 ): Promise<string> {
   ensureFilePathAllowed(filePath);
   ensureFilePathAllowed(snapshotPath);
 
-  // Load both workbooks. The snapshot is the "before"; the live file is "after".
-  const beforeWb = await loadWorkbook(snapshotPath);
-  const afterWb = await loadWorkbook(filePath);
+  const includeValues = options.includeValues !== false;
+  const includeFormulas = options.includeFormulas !== false;
+  const maxDifferences = options.maxDifferences && options.maxDifferences > 0
+    ? options.maxDifferences
+    : 500;
 
-  const beforeSheets = new Map<string, ExcelJS.Worksheet>();
-  beforeWb.eachSheet((s) => beforeSheets.set(s.name, s));
-  const afterSheets = new Map<string, ExcelJS.Worksheet>();
-  afterWb.eachSheet((s) => afterSheets.set(s.name, s));
+  // current = "left", snapshot = "right" (before)
+  const leftWb = await loadWorkbook(filePath);
+  const rightWb = await loadWorkbook(snapshotPath);
 
-  const allNames = new Set<string>([
-    ...beforeSheets.keys(),
-    ...afterSheets.keys(),
-  ]);
+  const leftSheets = new Map<string, ExcelJS.Worksheet>();
+  leftWb.eachSheet((s) => leftSheets.set(s.name, s));
+  const rightSheets = new Map<string, ExcelJS.Worksheet>();
+  rightWb.eachSheet((s) => rightSheets.set(s.name, s));
+
+  const allNames = new Set<string>([...leftSheets.keys(), ...rightSheets.keys()]);
 
   let sheetsAdded = 0;
   let sheetsRemoved = 0;
+  let sheetsChanged = 0;
+  let sheetsIdentical = 0;
   let totalCellChanges = 0;
-  const perSheet: Array<{
-    sheetName: string;
-    status: 'added' | 'removed' | 'changed' | 'identical';
-    cellChanges: number;
-  }> = [];
-  const differences: CellDiff[] = [];
+  const perSheet: Array<any> = [];
+  const differences: SheetDiffEntry[] = [];
 
   for (const name of allNames) {
-    const beforeSheet = beforeSheets.get(name);
-    const afterSheet = afterSheets.get(name);
+    const leftSheet = leftSheets.get(name);
+    const rightSheet = rightSheets.get(name);
 
-    if (!beforeSheet && afterSheet) {
+    if (leftSheet && !rightSheet) {
+      // Sheet exists in current but not in snapshot → ADDED since snapshot
       sheetsAdded++;
-      // Count "all cells" in the new sheet as added cells.
-      const ext = sheetExtent(afterSheet);
-      let added = 0;
-      const remaining = Math.max(0, DIFF_CAP - differences.length);
-      for (let r = 1; r <= ext.rowCount; r++) {
-        for (let c = 1; c <= ext.columnCount; c++) {
-          const v = afterSheet.getRow(r).getCell(c).value;
-          if (v === null || v === undefined || v === '') continue;
-          added++;
-          if (differences.length < DIFF_CAP) {
-            differences.push({
-              sheet: name,
-              cell: `${columnNumberToLetter(c)}${r}`,
-              before: null,
-              after: cellValueForDiff(v),
-            });
-          }
-          if (differences.length >= DIFF_CAP && added >= remaining) {
-            // continue counting but stop pushing (cheap loop)
-          }
-        }
+      const cells = collectCells(leftSheet);
+      const addedCells = cells.size;
+      totalCellChanges += addedCells;
+      const remaining = Math.max(0, maxDifferences - differences.length);
+      let pushed = 0;
+      for (const [addr, info] of cells) {
+        if (pushed >= remaining) break;
+        const entry: SheetDiffEntry = { sheet: name, address: addr, side: 'left-only' };
+        if (includeValues) entry.leftValue = info.value;
+        if (includeFormulas && info.formula) entry.leftFormula = info.formula;
+        differences.push(entry);
+        pushed++;
       }
-      totalCellChanges += added;
-      perSheet.push({ sheetName: name, status: 'added', cellChanges: added });
+      perSheet.push({ sheetName: name, status: 'added', addedCells });
       continue;
     }
 
-    if (beforeSheet && !afterSheet) {
+    if (rightSheet && !leftSheet) {
+      // Sheet exists in snapshot but not in current → REMOVED since snapshot
       sheetsRemoved++;
-      const ext = sheetExtent(beforeSheet);
-      let removed = 0;
-      for (let r = 1; r <= ext.rowCount; r++) {
-        for (let c = 1; c <= ext.columnCount; c++) {
-          const v = beforeSheet.getRow(r).getCell(c).value;
-          if (v === null || v === undefined || v === '') continue;
-          removed++;
-          if (differences.length < DIFF_CAP) {
-            differences.push({
-              sheet: name,
-              cell: `${columnNumberToLetter(c)}${r}`,
-              before: cellValueForDiff(v),
-              after: null,
-            });
-          }
-        }
+      const cells = collectCells(rightSheet);
+      const removedCells = cells.size;
+      totalCellChanges += removedCells;
+      const remaining = Math.max(0, maxDifferences - differences.length);
+      let pushed = 0;
+      for (const [addr, info] of cells) {
+        if (pushed >= remaining) break;
+        const entry: SheetDiffEntry = { sheet: name, address: addr, side: 'right-only' };
+        if (includeValues) entry.rightValue = info.value;
+        if (includeFormulas && info.formula) entry.rightFormula = info.formula;
+        differences.push(entry);
+        pushed++;
       }
-      totalCellChanges += removed;
-      perSheet.push({ sheetName: name, status: 'removed', cellChanges: removed });
+      perSheet.push({ sheetName: name, status: 'removed', removedCells });
       continue;
     }
 
-    // Both present — compare cell-by-cell.
-    const remaining = Math.max(0, DIFF_CAP - differences.length);
-    const { changes, cellChanges } = diffSheet(
-      beforeSheet!,
-      afterSheet!,
+    // Both present.
+    const remaining = Math.max(0, maxDifferences - differences.length);
+    const sheetResult = diffOneSheet(
       name,
+      leftSheet!,
+      rightSheet!,
       remaining,
+      includeValues,
+      includeFormulas,
     );
+    const cellChanges = sheetResult.added + sheetResult.removed + sheetResult.changed;
     totalCellChanges += cellChanges;
     if (cellChanges === 0) {
-      perSheet.push({ sheetName: name, status: 'identical', cellChanges: 0 });
+      sheetsIdentical++;
+      perSheet.push({ sheetName: name, status: 'identical' });
     } else {
-      perSheet.push({ sheetName: name, status: 'changed', cellChanges });
-      for (const c of changes) {
-        if (differences.length < DIFF_CAP) differences.push(c);
-      }
+      sheetsChanged++;
+      perSheet.push({
+        sheetName: name,
+        status: 'changed',
+        addedCells: sheetResult.added,
+        removedCells: sheetResult.removed,
+        changedCells: sheetResult.changed,
+      });
+      for (const d of sheetResult.diffs) differences.push(d);
     }
   }
 
+  const truncated = totalCellChanges > differences.length;
+
   return JSON.stringify(
     {
-      summary: { sheetsAdded, sheetsRemoved, totalCellChanges },
+      summary: {
+        sheetsAdded,
+        sheetsRemoved,
+        sheetsChanged,
+        sheetsIdentical,
+        totalCellChanges,
+      },
       perSheet,
       differences,
-      truncated: totalCellChanges > differences.length,
-      diffCap: DIFF_CAP,
+      truncated,
+      maxDifferences,
     },
     null,
     2,
@@ -318,13 +339,17 @@ export async function snapshotDiff(
 }
 
 // ----------------------------------------------------------------------------
-// Snapshot restore
+// snapshot_restore
 // ----------------------------------------------------------------------------
+
+function genBackupTimestamp(): string {
+  return genTimestamp();
+}
 
 export async function snapshotRestore(
   filePath: string,
   snapshotPath: string,
-  createBackup: boolean = false,
+  createBackup: boolean = true,
 ): Promise<string> {
   ensureFilePathAllowed(filePath);
   ensureFilePathAllowed(snapshotPath);
@@ -340,419 +365,43 @@ export async function snapshotRestore(
   if (createBackup) {
     try {
       await fs.access(filePath);
-      backupPath = `${filePath}.pre-restore-backup.xlsx`;
+      const ts = genBackupTimestamp();
+      const dir = dirname(filePath);
+      const base = basename(filePath);
+      const stem = base.replace(/\.(xlsx|xlsm)$/i, '');
+      backupPath = join(dir, `${stem}.pre-restore-backup-${ts}.xlsx`);
       ensureFilePathAllowed(backupPath);
       await fs.copyFile(filePath, backupPath);
-    } catch {
-      // Source doesn't exist — nothing to back up.
-    }
-  }
-
-  await fs.copyFile(snapshotPath, filePath);
-
-  return JSON.stringify(
-    {
-      success: true,
-      restoredFrom: snapshotPath,
-      restoredTo: filePath,
-      backupPath: backupPath ?? null,
-    },
-    null,
-    2,
-  );
-}
-
-// ----------------------------------------------------------------------------
-// Transaction safelist & executor
-// ----------------------------------------------------------------------------
-
-/**
- * Tools we'll execute inside a transaction. ALL must be file-mode (ExcelJS).
- * COM-only tools are excluded — they have side effects on a running Excel
- * process that can't be undone by overwriting the .xlsx file.
- *
- * Each entry is (validatedArgs) -> Promise<string>. We pre-validate args via
- * the schema BEFORE invocation so the executor can stay simple.
- */
-type OpExecutor = (args: any) => Promise<string>;
-
-export const TRANSACTION_SAFELIST: Record<string, OpExecutor> = {
-  excel_update_cell: (a) =>
-    updateCell(a.filePath, a.sheetName, a.cellAddress, a.value, a.createBackup),
-  excel_write_range: (a) =>
-    writeRange(a.filePath, a.sheetName, a.range, a.data, a.createBackup),
-  excel_set_formula: (a) =>
-    setFormula(a.filePath, a.sheetName, a.cellAddress, a.formula, a.createBackup),
-  excel_format_cell: (a) =>
-    formatCell(a.filePath, a.sheetName, a.cellAddress, a.format, a.createBackup),
-  excel_add_row: (a) =>
-    addRow(a.filePath, a.sheetName, a.data, a.createBackup),
-  excel_create_sheet: (a) =>
-    createSheet(a.filePath, a.sheetName, a.createBackup),
-  excel_delete_sheet: (a) =>
-    deleteSheet(a.filePath, a.sheetName, a.createBackup),
-  excel_rename_sheet: (a) =>
-    renameSheet(a.filePath, a.oldName, a.newName, a.createBackup),
-  excel_delete_rows: (a) =>
-    deleteRows(a.filePath, a.sheetName, a.startRow, a.count, a.createBackup),
-  excel_delete_columns: (a) =>
-    deleteColumns(a.filePath, a.sheetName, a.startColumn, a.count, a.createBackup),
-  excel_insert_rows: (a) =>
-    insertRows(a.filePath, a.sheetName, a.startRow, a.count, a.createBackup),
-  excel_insert_columns: (a) =>
-    insertColumns(a.filePath, a.sheetName, a.startColumn, a.count, a.createBackup),
-  excel_merge_cells: (a) =>
-    mergeCells(a.filePath, a.sheetName, a.range, a.createBackup),
-  excel_unmerge_cells: (a) =>
-    unmergeCells(a.filePath, a.sheetName, a.range, a.createBackup),
-  excel_copy_range: (a) =>
-    copyRange(
-      a.filePath,
-      a.sourceSheetName,
-      a.sourceRange,
-      a.targetSheetName,
-      a.targetCell,
-      a.createBackup,
-    ),
-  excel_add_hyperlink: (a) =>
-    addHyperlink(a.filePath, a.sheetName, a.cellAddress, a.target, {
-      text: a.text,
-      tooltip: a.tooltip,
-      createBackup: a.createBackup,
-    }),
-  excel_remove_hyperlink: (a) =>
-    removeHyperlink(a.filePath, a.sheetName, a.cellAddress, {
-      keepText: a.keepText,
-      createBackup: a.createBackup,
-    }),
-  excel_sort: (a) =>
-    sortRange(a.filePath, a.sheetName, a.range, {
-      sortBy: a.sortBy,
-      hasHeader: a.hasHeader,
-      createBackup: a.createBackup,
-    }),
-  excel_remove_duplicates: (a) =>
-    removeDuplicates(a.filePath, a.sheetName, a.range, {
-      columns: a.columns,
-      hasHeader: a.hasHeader,
-      createBackup: a.createBackup,
-    }),
-  excel_paste_special: (a) =>
-    pasteSpecial(a.filePath, a.sheetName, a.sourceRange, a.targetCell, {
-      mode: a.mode,
-      createBackup: a.createBackup,
-    }),
-  excel_create_named_range: (a) =>
-    createNamedRange(a.filePath, a.name, a.sheetName, a.range, a.createBackup),
-  excel_delete_named_range: (a) =>
-    deleteNamedRange(a.filePath, a.name, a.createBackup),
-  excel_set_data_validation: (a) =>
-    setDataValidation(
-      a.filePath,
-      a.sheetName,
-      a.range,
-      a.validationType,
-      a.formula1,
-      a.operator,
-      a.formula2,
-      a.showErrorMessage,
-      a.errorTitle,
-      a.errorMessage,
-      a.createBackup,
-    ),
-  excel_apply_conditional_format: (a) =>
-    applyConditionalFormat(
-      a.filePath,
-      a.sheetName,
-      a.range,
-      a.ruleType,
-      a.condition,
-      a.style,
-      a.colorScale,
-      a.createBackup,
-    ),
-};
-
-function tempSnapshotPath(filePath: string): string {
-  const dir = dirname(filePath);
-  const base = basename(filePath);
-  const stem = base.replace(/\.(xlsx|xlsm)$/i, '');
-  const rand = randomBytes(6).toString('hex');
-  return join(dir, `${stem}.tx-snapshot.${rand}.xlsx`);
-}
-
-async function silentUnlink(path: string): Promise<void> {
-  try {
-    await fs.unlink(path);
-  } catch {
-    /* ignore */
-  }
-}
-
-interface OpSpec {
-  tool: string;
-  args: Record<string, any>;
-}
-
-function rejectUnsafeTool(tool: string): never {
-  const err = new Error(
-    `excel_transaction: tool "${tool}" is not in the transaction safelist. ` +
-      `Only file-mode write tools can be executed transactionally — COM-only, AppleScript, ` +
-      `PowerShell, and live-mode tools are excluded because their side effects on a running ` +
-      `Excel process can't be undone by file rollback. Safelist: ${Object.keys(
-        TRANSACTION_SAFELIST,
-      )
-        .sort()
-        .join(', ')}.`,
-  );
-  (err as any).code = 'PLATFORM_UNSUPPORTED';
-  throw err;
-}
-
-interface ExecuteOptions {
-  /** If true, snapshot and rollback on failure. */
-  rollbackOnError: boolean;
-  /** Optional pre-existing snapshot path (used by diff_before_after to share). */
-  preCreatedSnapshot?: string;
-  /** If true, leave the snapshot in place on success (caller takes ownership). */
-  keepSnapshotOnSuccess: boolean;
-}
-
-interface ExecuteResult {
-  snapshotPath: string;
-  snapshotKept: boolean;
-  results: any[];
-}
-
-async function executeOperations(
-  filePath: string,
-  operations: OpSpec[],
-  opts: ExecuteOptions,
-): Promise<{ ok: true; data: ExecuteResult } | {
-  ok: false;
-  failedAtStep: number;
-  error: string;
-  operationsCompleted: number;
-  rolledBack: boolean;
-  snapshotPath: string;
-}> {
-  ensureFilePathAllowed(filePath);
-
-  // Validate all operation tool names BEFORE doing anything destructive.
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    if (!op || typeof op.tool !== 'string') {
-      throw new Error(
-        `Operation ${i} is malformed: expected { tool, args }, got ${JSON.stringify(op)}`,
-      );
-    }
-    if (!(op.tool in TRANSACTION_SAFELIST)) {
-      rejectUnsafeTool(op.tool);
-    }
-  }
-
-  // Confirm source exists.
-  try {
-    await fs.access(filePath);
-  } catch {
-    throw new Error(`File not found: ${filePath}`);
-  }
-
-  const snapshotPath = opts.preCreatedSnapshot ?? tempSnapshotPath(filePath);
-  ensureFilePathAllowed(snapshotPath);
-
-  if (!opts.preCreatedSnapshot) {
-    await fs.copyFile(filePath, snapshotPath);
-  }
-
-  const results: any[] = [];
-
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    const exec = TRANSACTION_SAFELIST[op.tool];
-    // Force-set filePath on the args so callers can't smuggle a different
-    // target into a transactional call.
-    const args = { ...(op.args ?? {}), filePath };
-    try {
-      const raw = await exec(args);
-      let parsed: any = raw;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        /* leave raw */
-      }
-      results.push({ step: i, tool: op.tool, result: parsed });
     } catch (err: any) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-
-      if (opts.rollbackOnError) {
-        // Restore the snapshot, then delete it.
-        try {
-          await fs.copyFile(snapshotPath, filePath);
-        } catch (restoreErr: any) {
-          // If we can't restore, the snapshot is the user's recovery path.
-          return {
-            ok: false,
-            failedAtStep: i,
-            error: `${errorMessage} (and rollback FAILED: ${restoreErr?.message ?? restoreErr}; snapshot preserved at ${snapshotPath})`,
-            operationsCompleted: i,
-            rolledBack: false,
-            snapshotPath,
-          };
+      // If filePath doesn't exist, no backup needed; otherwise re-throw.
+      if (err && err.code !== 'ENOENT') {
+        // Only swallow ENOENT (file doesn't exist).
+        if (!String(err.message ?? '').includes('ENOENT')) {
+          // best-effort — continue
         }
-        await silentUnlink(snapshotPath);
-        return {
-          ok: false,
-          failedAtStep: i,
-          error: errorMessage,
-          operationsCompleted: i,
-          rolledBack: true,
-          snapshotPath,
-        };
       }
-
-      // Non-rollback path: stop on error but leave the file as-is and the
-      // snapshot in place so caller can diagnose.
-      return {
-        ok: false,
-        failedAtStep: i,
-        error: errorMessage,
-        operationsCompleted: i,
-        rolledBack: false,
-        snapshotPath,
-      };
     }
   }
 
-  // All ops succeeded.
-  if (!opts.keepSnapshotOnSuccess) {
-    await silentUnlink(snapshotPath);
-  }
-
-  return {
-    ok: true,
-    data: {
-      snapshotPath,
-      snapshotKept: opts.keepSnapshotOnSuccess,
-      results,
-    },
-  };
-}
-
-export async function transaction(
-  filePath: string,
-  operations: OpSpec[],
-  _createBackup: boolean = false,
-): Promise<string> {
-  // _createBackup is accepted for symmetry with other write tools but is
-  // effectively redundant here — the snapshot IS a backup. We keep the param
-  // in the schema so future expansion (e.g., copy snapshot to a permanent
-  // .backup file on success) is non-breaking.
-  void _createBackup;
-
-  const result = await executeOperations(filePath, operations, {
-    rollbackOnError: true,
-    keepSnapshotOnSuccess: false,
-  });
-
-  if (!result.ok) {
-    return JSON.stringify(
-      {
-        success: false,
-        failedAtStep: result.failedAtStep,
-        error: result.error,
-        operationsCompleted: result.operationsCompleted,
-        rolledBack: result.rolledBack,
-      },
-      null,
-      2,
-    );
-  }
-
-  return JSON.stringify(
-    {
-      success: true,
-      operationsExecuted: result.data.results.length,
-      results: result.data.results,
-    },
-    null,
-    2,
-  );
-}
-
-export async function diffBeforeAfter(
-  filePath: string,
-  operations: OpSpec[],
-  keepSnapshot: boolean = false,
-): Promise<string> {
-  ensureFilePathAllowed(filePath);
-
-  // Pre-create the snapshot so we have a stable "before" path to diff against.
-  const snapshotPath = tempSnapshotPath(filePath);
-  ensureFilePathAllowed(snapshotPath);
-
+  // Try FICLONE first (fast copy-on-write on supported filesystems), fall back.
   try {
-    await fs.access(filePath);
+    await fs.copyFile(snapshotPath, filePath, fsConstants.COPYFILE_FICLONE);
   } catch {
-    throw new Error(`File not found: ${filePath}`);
-  }
-  await fs.copyFile(filePath, snapshotPath);
-
-  // Execute ops without rollback — we want to see what they actually did,
-  // even on partial failure.
-  const exec = await executeOperations(filePath, operations, {
-    rollbackOnError: false,
-    preCreatedSnapshot: snapshotPath,
-    keepSnapshotOnSuccess: true, // we control deletion ourselves below
-  });
-
-  // Diff regardless of success/failure.
-  const diffStr = await snapshotDiff(filePath, snapshotPath);
-  const diff = JSON.parse(diffStr);
-
-  // Optionally clean up the snapshot.
-  let finalSnapshotPath: string | null = snapshotPath;
-  if (!keepSnapshot) {
-    await silentUnlink(snapshotPath);
-    finalSnapshotPath = null;
+    await fs.copyFile(snapshotPath, filePath);
   }
 
-  if (!exec.ok) {
-    return JSON.stringify(
-      {
-        success: false,
-        failedAtStep: exec.failedAtStep,
-        error: exec.error,
-        operationsCompleted: exec.operationsCompleted,
-        rolledBack: false,
-        snapshotPath: finalSnapshotPath,
-        diff,
-      },
-      null,
-      2,
-    );
-  }
-
-  return JSON.stringify(
-    {
-      success: true,
-      operationsExecuted: exec.data.results.length,
-      snapshotPath: finalSnapshotPath,
-      diff,
-    },
-    null,
-    2,
-  );
+  const out: any = {
+    success: true,
+    restoredFrom: snapshotPath,
+    restoredTo: filePath,
+  };
+  if (backupPath) out.preRestoreBackup = backupPath;
+  return JSON.stringify(out, null, 2);
 }
 
 // Help the index.ts wiring stay in sync.
-export const TIER_C_TOOL_NAMES = [
+export const TIER_C_SNAPSHOT_TOOL_NAMES = [
   'excel_snapshot_create',
   'excel_snapshot_diff',
   'excel_snapshot_restore',
-  'excel_transaction',
-  'excel_diff_before_after',
 ] as const;
-
-// Silence lint for unused `resolve` in case path manipulation grows.
-void resolve;

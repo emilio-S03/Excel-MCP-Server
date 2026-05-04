@@ -168,20 +168,26 @@ async function execPowerShellWithRetry(
       if (attempt === retries) {
         // Categorize the error for better diagnostics
         let categorized: string;
+        let code: string | undefined;
         if (error.killed === true) {
           categorized = 'PowerShell timed out. Excel may have a modal dialog open (e.g., a VBA error popup or Save prompt). Dismiss the dialog in Excel and retry. Use excel_diagnose_connection to investigate.';
+          code = 'COM_TIMEOUT';
         } else if (error.message && (error.message.includes('GetActiveObject') || error.message.includes('0x800401E3'))) {
           categorized = 'Could not connect to Excel via COM. Excel may not be running, or it may be running elevated (as admin) while this process is not. Use excel_diagnose_connection to investigate.';
+          code = 'COM_UNREACHABLE';
         } else if (error.message && error.message.toLowerCase().includes('trust')) {
           categorized = 'VBA trust access denied. Enable "Trust access to the VBA project object model" in Excel: File > Options > Trust Center > Trust Center Settings > Macro Settings. Then restart Excel.';
+          code = 'VBA_TRUST_DENIED';
         } else if (error.message && /0x800A/.test(error.message)) {
           const hresultMatch = error.message.match(/(0x800A[0-9A-Fa-f]+)/);
           categorized = `Excel COM error${hresultMatch ? ` (HRESULT ${hresultMatch[1]})` : ''}: ${error.message}. Use excel_diagnose_connection to investigate.`;
+          code = 'COM_ERROR';
         } else {
           categorized = `${error.message || error}. Use excel_diagnose_connection to investigate.`;
         }
         const categorizedError = new Error(categorized);
         (categorizedError as any).originalError = error;
+        if (code) (categorizedError as any).code = code;
         throw categorizedError;
       }
 

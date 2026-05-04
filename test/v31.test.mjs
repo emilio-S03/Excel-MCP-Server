@@ -31,10 +31,10 @@ async function callOk(name, args) {
 // Bootstrap a workbook from CSV
 await callOk('excel_csv_import', { csvPath: csvIn, targetXlsx: xlsxPath, sheetName: 'Data', hasHeader: true });
 
-test('tools/list reports 104 tools including v3.1 + modern-charts + audit + tier-A + tier-B additions', async () => {
+test('tools/list reports 110 tools including v3.1 + modern-charts + audit + tier-A + tier-B + tier-C additions', async () => {
   const tools = await server.listTools();
   const names = new Set(tools.map((t) => t.name));
-  assert.equal(tools.length, 104);
+  assert.equal(tools.length, 110);
   for (const t of [
     'excel_get_conditional_formats',
     'excel_list_data_validations',

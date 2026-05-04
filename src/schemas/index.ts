@@ -222,6 +222,7 @@ export const createChartSchema = z.object({
   title: z.string().optional().describe('Chart title'),
   showLegend: z.boolean().default(true),
   createBackup: z.boolean().default(false),
+  dedupKey: z.string().optional().describe('Optional idempotency key. If provided and the same key was already used for this tool on this workbook, the call is skipped and returns the previous record instead of re-applying.'),
 });
 
 // Pivot Tables
@@ -238,6 +239,7 @@ export const createPivotTableSchema = z.object({
     aggregation: z.enum(['sum', 'count', 'average', 'min', 'max']),
   })).describe('Fields to aggregate'),
   createBackup: z.boolean().default(false),
+  dedupKey: z.string().optional().describe('Optional idempotency key. If provided and the same key was already used for this tool on this workbook, the call is skipped and returns the previous record instead of re-applying.'),
 });
 
 // Tables
@@ -328,6 +330,7 @@ export const applyConditionalFormatSchema = z.object({
     maxColor: z.string().optional().default('FF00FF00'),
   }).optional().describe('For colorScale type'),
   createBackup: z.boolean().default(false),
+  dedupKey: z.string().optional().describe('Optional idempotency key. If provided and the same key was already used for this tool on this workbook, the call is skipped and returns the previous record instead of re-applying.'),
 });
 
 // ============================================================
@@ -365,6 +368,7 @@ export const createNamedRangeSchema = z.object({
   sheetName: sheetNameSchema,
   range: rangeSchema.describe('Cell range to name (e.g., A1:D10)'),
   createBackup: z.boolean().default(false),
+  dedupKey: z.string().optional().describe('Optional idempotency key. If provided and the same key was already used for this tool on this workbook, the call is skipped and returns the previous record instead of re-applying.'),
 });
 
 export const deleteNamedRangeSchema = z.object({
@@ -412,6 +416,7 @@ export const setDataValidationSchema = z.object({
   errorTitle: z.string().optional().default('Invalid Input'),
   errorMessage: z.string().optional().default('The value entered is not valid.'),
   createBackup: z.boolean().default(false),
+  dedupKey: z.string().optional().describe('Optional idempotency key. If provided and the same key was already used for this tool on this workbook, the call is skipped and returns the previous record instead of re-applying.'),
 });
 
 // ============================================================
@@ -1116,4 +1121,53 @@ export const readSheetMergedAwareSchema = z.object({
   includeMergedMetadata: z.boolean().optional().default(false)
     .describe('When true, also returns mergedCells: [{topLeft, range, value}] describing every merged region intersecting the read window.'),
   responseFormat: responseFormatSchema,
+});
+
+// =============================================================================
+// Tier C — Snapshot + transaction tools (v3.4)
+// =============================================================================
+
+export const snapshotCreateSchema = z.object({
+  filePath: filePathSchema,
+  snapshotId: z.string().optional()
+    .describe('Optional snapshot identifier appended to the snapshot filename. If omitted a UTC timestamp is used.'),
+});
+
+export const snapshotDiffSchema = z.object({
+  filePath: filePathSchema.describe('Current workbook (the "after" state).'),
+  snapshotPath: filePathSchema.describe('Snapshot workbook (the "before" state).'),
+  includeValues: z.boolean().optional().default(true)
+    .describe('Include leftValue/rightValue in diff entries (default: true). Left = current, Right = snapshot.'),
+  includeFormulas: z.boolean().optional().default(true)
+    .describe('Include leftFormula/rightFormula in diff entries (default: true).'),
+  maxDifferences: z.number().int().positive().optional().default(500)
+    .describe('Hard cap on returned differences across ALL sheets (default: 500). Excess diffs are counted in the summary but not enumerated.'),
+});
+
+export const snapshotRestoreSchema = z.object({
+  filePath: filePathSchema.describe('File to overwrite with the snapshot contents.'),
+  snapshotPath: filePathSchema.describe('Snapshot to restore from.'),
+  createBackup: z.boolean().optional().default(true)
+    .describe('When true (default), copy the current filePath to <filePath>.pre-restore-backup-<timestamp>.xlsx before overwriting.'),
+});
+
+const transactionOperationSchema = z.object({
+  tool: z.string().describe('Name of the underlying tool to invoke (e.g. excel_update_cell). Must be in the transaction safelist.'),
+  args: z.record(z.any()).describe("Args object for the tool. filePath is force-set to the transaction filePath."),
+});
+
+export const transactionSchema = z.object({
+  filePath: filePathSchema.describe("Workbook to operate on. Force-applied to every sub-operation's args."),
+  operations: z.array(transactionOperationSchema)
+    .describe('Sequential list of {tool, args} operations. Validated up-front; one bad tool name rejects the whole batch.'),
+  createBackup: z.boolean().optional().default(false)
+    .describe('Reserved — the snapshot itself acts as the rollback target.'),
+});
+
+export const diffBeforeAfterSchema = z.object({
+  filePath: filePathSchema,
+  operations: z.array(transactionOperationSchema)
+    .describe('Operations to run between the snapshot and the diff. Same safelist as excel_transaction.'),
+  keepSnapshot: z.boolean().optional().default(false)
+    .describe('When true, the snapshot file is left in place and its path is returned. Default deletes it.'),
 });

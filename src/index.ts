@@ -83,9 +83,31 @@ import {
   validateNamedRangeTargets,
   getCalculationChain,
 } from './tools/tier-b.js';
+import {
+  snapshotCreate,
+  snapshotDiff,
+  snapshotRestore,
+} from './tools/snapshot.js';
+import {
+  transaction,
+  diffBeforeAfter,
+} from './tools/transaction.js';
+import { readSheetMergedAware } from './tools/read.js';
 
 import { TOOL_ANNOTATIONS } from './constants.js';
 import * as schemas from './schemas/index.js';
+import { checkAndRecord as idempotencyCheckAndRecord } from './tools/idempotency.js';
+
+// Tools that honor an optional `dedupKey` argument. Calling such a tool with
+// the same dedupKey twice on the same workbook short-circuits the second call
+// (returns skipped:true) instead of re-applying the operation.
+const DEDUP_TOOLS = new Set<string>([
+  'excel_create_named_range',
+  'excel_apply_conditional_format',
+  'excel_set_data_validation',
+  'excel_create_chart',
+  'excel_create_pivot_table',
+]);
 
 // User configuration storage
 // Hydrated from environment variables at boot. The .mcpb spec uses
@@ -242,13 +264,19 @@ const toolSchemas: Record<string, any> = {
   excel_get_calculation_chain: schemas.getCalculationChainSchema,
   // Tier C — merged-cell-aware reads
   excel_read_sheet_merged_aware: schemas.readSheetMergedAwareSchema,
+  // Tier C — snapshot + transactional batch executor (v3.4)
+  excel_snapshot_create: schemas.snapshotCreateSchema,
+  excel_snapshot_diff: schemas.snapshotDiffSchema,
+  excel_snapshot_restore: schemas.snapshotRestoreSchema,
+  excel_transaction: schemas.transactionSchema,
+  excel_diff_before_after: schemas.diffBeforeAfterSchema,
 };
 
 // Create server instance
 const server = new Server(
   {
     name: 'excel-mcp-server',
-    version: '3.3.0',
+    version: '3.4.0',
   },
   {
     capabilities: {
@@ -268,7 +296,7 @@ server.setRequestHandler(InitializeRequestSchema, async () => {
     },
     serverInfo: {
       name: 'excel-mcp-server',
-      version: '3.3.0',
+      version: '3.4.0',
     },
   };
 });
@@ -2135,6 +2163,119 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
         annotations: TOOL_ANNOTATIONS.READ_ONLY,
       },
+      // ============================================================
+      // Tier C — workflow-shaping tools (v3.4)
+      // ============================================================
+      {
+        name: 'excel_read_sheet_merged_aware',
+        description: 'Read a sheet/range like excel_read_sheet but with merged-cell awareness. With fillMerged: true (default), every cell in a merged region is populated with the top-left value so iterating the returned 2D array does not yield mysterious empty cells. With includeMergedMetadata: true, the response also includes mergedCells:[{topLeft, range, value}] describing every merged region intersecting the read window. File-mode, cross-platform.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file' },
+            sheetName: { type: 'string', description: 'Name of the sheet' },
+            range: { type: 'string', description: 'Optional range to read (e.g., A1:D10). Defaults to the used range.' },
+            fillMerged: { type: 'boolean', default: true, description: 'Populate every cell in a merged region with the top-left value.' },
+            includeMergedMetadata: { type: 'boolean', default: false, description: 'Also return mergedCells:[{topLeft, range, value}] for every merged region in the read area.' },
+            responseFormat: { type: 'string', enum: ['json', 'markdown'], default: 'json' },
+          },
+          required: ['filePath', 'sheetName'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_snapshot_create',
+        description: 'Create a point-in-time snapshot of a workbook by copying it to a sibling file. The snapshot lives at <filePath>.snapshot.<id>.xlsx in the SAME directory as the source so it stays inside the sandbox. Returns {snapshotPath, snapshotId, fileSize, timestamp}. Pair with excel_snapshot_diff and excel_snapshot_restore for safe edit-then-review workflows.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Path to the Excel file to snapshot' },
+            snapshotId: { type: 'string', description: 'Optional snapshot identifier; UTC timestamp used by default.' },
+          },
+          required: ['filePath'],
+        },
+        annotations: TOOL_ANNOTATIONS.IDEMPOTENT,
+      },
+      {
+        name: 'excel_snapshot_diff',
+        description: 'Diff every sheet between the current workbook (left) and a previously created snapshot (right). For sheets present in both, walks every populated cell and emits left-only / right-only / both-changed entries. Returns {summary:{sheetsAdded, sheetsRemoved, sheetsChanged, sheetsIdentical, totalCellChanges}, perSheet:[{sheetName, status, addedCells?, removedCells?, changedCells?}], differences:[{sheet, address, side, leftValue?, rightValue?, leftFormula?, rightFormula?}], truncated}. Cap differences at maxDifferences (default 500) total across all sheets.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Current workbook (the "after" state)' },
+            snapshotPath: { type: 'string', description: 'Snapshot workbook (the "before" state)' },
+            includeValues: { type: 'boolean', default: true, description: 'Include leftValue/rightValue in diff entries.' },
+            includeFormulas: { type: 'boolean', default: true, description: 'Include leftFormula/rightFormula in diff entries.' },
+            maxDifferences: { type: 'integer', minimum: 1, default: 500, description: 'Hard cap on returned differences across all sheets.' },
+          },
+          required: ['filePath', 'snapshotPath'],
+        },
+        annotations: TOOL_ANNOTATIONS.READ_ONLY,
+      },
+      {
+        name: 'excel_snapshot_restore',
+        description: 'Restore the workbook by overwriting filePath with the contents of snapshotPath. By default (createBackup:true) the current filePath is first copied to <filePath>.pre-restore-backup-<timestamp>.xlsx so a botched restore can itself be undone. Uses fast COPYFILE_FICLONE when supported, with a plain-copy fallback. Returns {success, restoredFrom, restoredTo, preRestoreBackup?}.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'File to overwrite with snapshot contents' },
+            snapshotPath: { type: 'string', description: 'Snapshot file to restore from' },
+            createBackup: { type: 'boolean', default: true, description: 'Copy filePath to a pre-restore-backup file before overwriting.' },
+          },
+          required: ['filePath', 'snapshotPath'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_transaction',
+        description: 'Atomic batch executor for file-mode write tools. Snapshots the workbook, runs the operations sequentially, and AUTOMATICALLY ROLLS BACK by restoring the snapshot if any operation throws. Returns {success:true, operationsExecuted, results} on full success or {success:false, failedAtStep, error, errorCode?, operationsCompleted, rolledBack} on failure. Each operation is {tool, args}; the tool name MUST be in the transaction safelist (file-mode write tools only — COM/AppleScript/PowerShell-backed tools are rejected with code PLATFORM_UNSUPPORTED before any work happens). filePath is force-applied to every sub-operation\'s args.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Workbook to operate on (force-applied to every sub-op).' },
+            operations: {
+              type: 'array',
+              description: 'Sequential list of {tool, args} operations.',
+              items: {
+                type: 'object',
+                properties: {
+                  tool: { type: 'string', description: 'Safelisted tool name (e.g., excel_update_cell).' },
+                  args: { type: 'object', description: 'Args for the tool.' },
+                },
+                required: ['tool', 'args'],
+              },
+            },
+            createBackup: { type: 'boolean', default: false, description: 'Reserved — the snapshot already serves as the rollback target.' },
+          },
+          required: ['filePath', 'operations'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
+      {
+        name: 'excel_diff_before_after',
+        description: 'Convenience wrapper for "show me what these edits did". Snapshots the workbook, runs the operations (same safelist as excel_transaction), then computes a snapshot_diff. Does NOT roll back on failure (use excel_transaction for atomic safety). Returns {success, operationsExecuted, snapshotPath?, diff, failedAtStep?, error?}. With keepSnapshot:false (default) the snapshot file is deleted afterward; pass keepSnapshot:true to retain it.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'Workbook to operate on.' },
+            operations: {
+              type: 'array',
+              description: 'Sequential list of {tool, args} operations.',
+              items: {
+                type: 'object',
+                properties: {
+                  tool: { type: 'string', description: 'Safelisted tool name.' },
+                  args: { type: 'object', description: 'Args for the tool.' },
+                },
+                required: ['tool', 'args'],
+              },
+            },
+            keepSnapshot: { type: 'boolean', default: false, description: 'Leave the snapshot file in place and return its path.' },
+          },
+          required: ['filePath', 'operations'],
+        },
+        annotations: TOOL_ANNOTATIONS.DESTRUCTIVE,
+      },
     ],
   };
 });
@@ -2171,6 +2312,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     if (validatedArgs.responseFormat === undefined && userConfig.defaultResponseFormat !== undefined) {
       validatedArgs.responseFormat = userConfig.defaultResponseFormat;
+    }
+
+    // Idempotency pre-check: when a supported tool is invoked with dedupKey,
+    // record (or detect) the marker in the workbook's veryHidden bookkeeping
+    // sheet. If the marker already exists we short-circuit and never call the
+    // underlying handler.
+    if (
+      DEDUP_TOOLS.has(name) &&
+      typeof validatedArgs.dedupKey === 'string' &&
+      validatedArgs.dedupKey.length > 0 &&
+      typeof validatedArgs.filePath === 'string'
+    ) {
+      const dedupKey: string = validatedArgs.dedupKey;
+      const argsSummary = JSON.stringify(validatedArgs);
+      const hit = await idempotencyCheckAndRecord(
+        validatedArgs.filePath,
+        name,
+        dedupKey,
+        argsSummary
+      );
+      if (hit.skipped) {
+        const reason = `idempotency: dedupKey "${dedupKey}" already applied at ${hit.previous?.timestamp ?? 'unknown'}`;
+        const payload = {
+          skipped: true,
+          reason,
+          previousArgsSummary: hit.previous?.argsSummary,
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+        };
+      }
     }
 
     let result: string;
@@ -2917,6 +3089,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = await getCalculationChain(validatedArgs.filePath);
         break;
 
+      // Tier C — workflow-shaping tools (v3.4)
+      case 'excel_read_sheet_merged_aware':
+        result = await readSheetMergedAware(
+          validatedArgs.filePath,
+          validatedArgs.sheetName,
+          {
+            range: validatedArgs.range,
+            fillMerged: validatedArgs.fillMerged,
+            includeMergedMetadata: validatedArgs.includeMergedMetadata,
+            responseFormat: validatedArgs.responseFormat,
+          }
+        );
+        break;
+      case 'excel_snapshot_create':
+        result = await snapshotCreate(validatedArgs.filePath, validatedArgs.snapshotId);
+        break;
+      case 'excel_snapshot_diff':
+        result = await snapshotDiff(
+          validatedArgs.filePath,
+          validatedArgs.snapshotPath,
+          {
+            includeValues: validatedArgs.includeValues,
+            includeFormulas: validatedArgs.includeFormulas,
+            maxDifferences: validatedArgs.maxDifferences,
+          }
+        );
+        break;
+      case 'excel_snapshot_restore':
+        result = await snapshotRestore(
+          validatedArgs.filePath,
+          validatedArgs.snapshotPath,
+          validatedArgs.createBackup
+        );
+        break;
+      case 'excel_transaction':
+        result = await transaction(
+          validatedArgs.filePath,
+          validatedArgs.operations,
+          validatedArgs.createBackup
+        );
+        break;
+      case 'excel_diff_before_after':
+        result = await diffBeforeAfter(
+          validatedArgs.filePath,
+          validatedArgs.operations,
+          validatedArgs.keepSnapshot
+        );
+        break;
+
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
@@ -2931,11 +3152,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorCode = (error as any)?.code;
+    const responseObj: any = { error: errorMessage };
+    if (errorCode) responseObj.errorCode = errorCode;
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({ error: errorMessage }, null, 2),
+          text: JSON.stringify(responseObj, null, 2),
         },
       ],
       isError: true,

@@ -211,6 +211,10 @@ const FILE_MODE_TOOLS = [
   // Tier B diagnostic tools (file-mode)
   'excel_dependency_graph', 'excel_compare_sheets', 'excel_validate_named_range_targets',
   'excel_get_calculation_chain',
+  // Tier C — snapshot, transaction, merged-aware read (v3.4)
+  'excel_read_sheet_merged_aware',
+  'excel_snapshot_create', 'excel_snapshot_diff', 'excel_snapshot_restore',
+  'excel_transaction', 'excel_diff_before_after',
 ];
 
 export async function checkEnvironment(): Promise<string> {
@@ -256,7 +260,7 @@ export async function checkEnvironment(): Promise<string> {
   const report: EnvironmentReport = {
     platform: plat,
     nodeVersion: process.version,
-    serverVersion: "3.3.0",
+    serverVersion: "3.4.0",
     excel,
     ...(vbaTrust ? { vbaTrust } : {}),
     ...(automationPermission ? { automationPermission } : {}),

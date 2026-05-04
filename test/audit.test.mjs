@@ -52,10 +52,10 @@ async function callOk(name, args) {
   return JSON.parse(r.result.content[0].text);
 }
 
-test('tools/list reports 104 tools including formula audit + tier-A + tier-B additions', async () => {
+test('tools/list reports 110 tools including formula audit + tier-A + tier-B + tier-C additions', async () => {
   const tools = await server.listTools();
   const names = new Set(tools.map((t) => t.name));
-  assert.equal(tools.length, 104);
+  assert.equal(tools.length, 110);
   for (const t of [
     'excel_find_formula_errors',
     'excel_find_circular_references',

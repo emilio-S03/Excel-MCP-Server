@@ -1,9 +1,9 @@
 {
   "dxt_version": "0.1",
   "name": "excel-mcp-server",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "display_name": "Excel MCP Server",
-  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 104 tools, cross-platform.",
+  "description": "MCP server for cross-file Excel work — multi-workbook ops, VBA authoring, CSV consolidation, and project-context-aware automation that the in-Excel Claude add-in cannot do. 110 tools, cross-platform.",
   "long_description": "A powerful Model Context Protocol (MCP) server for working with Excel files. Provides comprehensive tools for reading, writing, formatting, analyzing Excel spreadsheets, creating charts, pivot tables, conditional formatting, and much more. Built with TypeScript and ExcelJS for maximum reliability and type safety.",
   "author": {
     "name": "Excel MCP Server Team"
@@ -470,6 +470,30 @@
     {
       "name": "excel_get_calculation_chain",
       "description": "Read xl/calcChain.xml from inside the .xlsx zip part. Each entry is the next cell Excel needs to recalculate; the chain reflects formula precedence order. Returns {totalEntries, chain:[{cell, sheetId, sheetName}]}. If xl/calcChain.xml is missing (Excel hasn't recalculated this file yet, or the file was never opened in Excel), returns {totalEntries:0, chain:[], note:\"...\"}."
+    },
+    {
+      "name": "excel_read_sheet_merged_aware",
+      "description": "Read a sheet/range like excel_read_sheet but with merged-cell awareness. With fillMerged: true (default), every cell in a merged region is populated with the top-left value so iterating the returned 2D array does not yield mysterious empty cells. With includeMergedMetadata: true, the response also includes mergedCells:[{topLeft, range, value}] describing every merged region intersecting the read window. File-mode, cross-platform."
+    },
+    {
+      "name": "excel_snapshot_create",
+      "description": "Create a point-in-time snapshot of a workbook by copying it to a sibling file. The snapshot lives at <filePath>.snapshot.<id>.xlsx in the SAME directory as the source so it stays inside the sandbox. Returns {snapshotPath, snapshotId, fileSize, timestamp}. Pair with excel_snapshot_diff and excel_snapshot_restore for safe edit-then-review workflows."
+    },
+    {
+      "name": "excel_snapshot_diff",
+      "description": "Diff every sheet between the current workbook (left) and a previously created snapshot (right). For sheets present in both, walks every populated cell and emits left-only / right-only / both-changed entries. Returns {summary:{sheetsAdded, sheetsRemoved, sheetsChanged, sheetsIdentical, totalCellChanges}, perSheet:[{sheetName, status, addedCells?, removedCells?, changedCells?}], differences:[{sheet, address, side, leftValue?, rightValue?, leftFormula?, rightFormula?}], truncated}. Cap differences at maxDifferences (default 500) total across all sheets."
+    },
+    {
+      "name": "excel_snapshot_restore",
+      "description": "Restore the workbook by overwriting filePath with the contents of snapshotPath. By default (createBackup:true) the current filePath is first copied to <filePath>.pre-restore-backup-<timestamp>.xlsx so a botched restore can itself be undone. Uses fast COPYFILE_FICLONE when supported, with a plain-copy fallback. Returns {success, restoredFrom, restoredTo, preRestoreBackup?}."
+    },
+    {
+      "name": "excel_transaction",
+      "description": "Atomic batch executor for file-mode write tools. Snapshots the workbook, runs the operations sequentially, and AUTOMATICALLY ROLLS BACK by restoring the snapshot if any operation throws. Returns {success:true, operationsExecuted, results} on full success or {success:false, failedAtStep, error, errorCode?, operationsCompleted, rolledBack} on failure. Each operation is {tool, args}; the tool name MUST be in the transaction safelist (file-mode write tools only — COM/AppleScript/PowerShell-backed tools are rejected with code PLATFORM_UNSUPPORTED before any work happens). filePath is force-applied to every sub-operation's args."
+    },
+    {
+      "name": "excel_diff_before_after",
+      "description": "Convenience wrapper for \"show me what these edits did\". Snapshots the workbook, runs the operations (same safelist as excel_transaction), then computes a snapshot_diff. Does NOT roll back on failure (use excel_transaction for atomic safety). Returns {success, operationsExecuted, snapshotPath?, diff, failedAtStep?, error?}. With keepSnapshot:false (default) the snapshot file is deleted afterward; pass keepSnapshot:true to retain it."
     }
   ],
   "tools_generated": false,

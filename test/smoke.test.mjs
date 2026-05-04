@@ -29,10 +29,10 @@ async function callOk(name, args) {
   return JSON.parse(r.result.content[0].text);
 }
 
-test('tools/list exposes 104 tools including v3 + v3.1 + modern-charts + audit + tier-A + tier-B additions', async () => {
+test('tools/list exposes 110 tools including v3 + v3.1 + modern-charts + audit + tier-A + tier-B + tier-C additions', async () => {
   const tools = await server.listTools();
   const names = new Set(tools.map((t) => t.name));
-  assert.equal(tools.length, 104);
+  assert.equal(tools.length, 110);
   for (const t of [
     'excel_check_environment',
     'excel_add_image',
@@ -47,7 +47,7 @@ test('tools/list exposes 104 tools including v3 + v3.1 + modern-charts + audit +
 test('excel_check_environment returns capability matrix', async () => {
   const r = await callOk('excel_check_environment', {});
   assert.ok(['win32', 'darwin', 'linux'].includes(r.platform));
-  assert.equal(r.serverVersion, '3.3.0');
+  assert.equal(r.serverVersion, '3.4.0');
   assert.equal(r.capabilityMatrix.fileMode.available, true);
   assert.ok(Array.isArray(r.config.allowedDirectories));
   assert.equal(r.config.allowedDirectoriesIsDefault, false, 'sandbox is overridden by test env');

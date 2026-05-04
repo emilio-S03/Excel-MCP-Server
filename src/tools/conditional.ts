@@ -1,6 +1,72 @@
 import { loadWorkbook, getSheet, saveWorkbook, parseRange } from './helpers.js';
 import { isExcelRunningLive, isFileOpenInExcelLive, applyConditionalFormatLive, saveFileLive } from './excel-live.js';
 
+interface RangeRect {
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
+}
+
+function rangesOverlap(a: RangeRect, b: RangeRect): boolean {
+  return !(a.endRow < b.startRow || a.startRow > b.endRow || a.endCol < b.startCol || a.startCol > b.endCol);
+}
+
+function tryParseMergeRect(s: string): RangeRect | null {
+  const pair = s.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+  const lettersToNum = (letters: string): number => {
+    let n = 0;
+    for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+    return n;
+  };
+  if (pair) {
+    return {
+      startCol: lettersToNum(pair[1]),
+      startRow: parseInt(pair[2]),
+      endCol: lettersToNum(pair[3]),
+      endRow: parseInt(pair[4]),
+    };
+  }
+  const single = s.match(/^([A-Z]+)(\d+)$/);
+  if (single) {
+    const c = lettersToNum(single[1]);
+    const r = parseInt(single[2]);
+    return { startCol: c, startRow: r, endCol: c, endRow: r };
+  }
+  return null;
+}
+
+/**
+ * Inspect the workbook on disk for merged ranges on the named sheet that
+ * overlap the target CF range. Throws CF_RANGE_OVERLAPS_MERGED if any do.
+ * Used as a precondition both in live (COM) and ExcelJS code paths so the
+ * silent-failure mode is closed off everywhere.
+ */
+async function ensureNoMergedOverlap(
+  filePath: string,
+  sheetName: string,
+  targetRect: RangeRect,
+  rangeLabel: string
+): Promise<void> {
+  const workbook = await loadWorkbook(filePath);
+  const sheet = getSheet(workbook, sheetName);
+  const merges: string[] = (sheet.model as any)?.merges || [];
+  const overlapping: string[] = [];
+  for (const m of merges) {
+    const rect = tryParseMergeRect(m);
+    if (!rect) continue;
+    if (rangesOverlap(rect, targetRect)) overlapping.push(m);
+  }
+  if (overlapping.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Cannot apply conditional formatting to range ${rangeLabel} — it overlaps merged cell(s): ${overlapping.join(', ')}. Unmerge first via excel_unmerge_cells, or apply CF to a non-overlapping range.`
+      ),
+      { code: 'CF_RANGE_OVERLAPS_MERGED' }
+    );
+  }
+}
+
 export async function applyConditionalFormat(
   filePath: string,
   sheetName: string,
@@ -31,6 +97,12 @@ export async function applyConditionalFormat(
 ): Promise<string> {
   // Parse range for validation
   const { startRow, startCol, endRow, endCol } = parseRange(range);
+  const targetRect: RangeRect = { startRow, startCol, endRow, endCol };
+
+  // Pre-flight: refuse to silently no-op when the target range overlaps merged
+  // cells. ExcelJS (and even some COM paths) silently produce zero CF rules
+  // in that case. Surface a structured error instead.
+  await ensureNoMergedOverlap(filePath, sheetName, targetRect, range);
 
   // Check if Excel is running and file is open — use COM if so
   const excelRunning = await isExcelRunningLive();

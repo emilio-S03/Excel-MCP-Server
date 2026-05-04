@@ -81,3 +81,7 @@ If `excel_check_environment` shows everything green and you're still stuck, capt
 3. Output of `excel_check_environment`.
 
 …and ask in the support channel.
+
+## The `__excel_mcp_idempotency__` sheet
+
+If you see a sheet named `__excel_mcp_idempotency__` in your workbook, that's an internal bookkeeping sheet used by the dedupKey feature. It's marked very-hidden so you won't see it normally. Don't edit it — the server uses it to detect duplicate operations.

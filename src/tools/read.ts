@@ -1,5 +1,22 @@
 import { loadWorkbook, getSheet, cellValueToString, formatDataAsTable, parseRange, columnNumberToLetter } from './helpers.js';
+import { isExcelRunningLive, isFileOpenInExcelLive } from './excel-live.js';
 import type { WorkbookInfo, SheetInfo, ResponseFormat } from '../types.js';
+
+const STALE_READ_WARNING =
+  'File is open in Excel — read reflects on-disk state, which may not include unsaved live changes. Save in Excel (Cmd-S/Ctrl-S) before reading, or use excel_diagnose_connection.';
+
+async function getStaleReadWarnings(filePath: string): Promise<string[]> {
+  try {
+    const running = await isExcelRunningLive();
+    if (!running) return [];
+    const open = await isFileOpenInExcelLive(filePath);
+    if (!open) return [];
+    return [STALE_READ_WARNING];
+  } catch {
+    // Detection itself shouldn't break a read — silently degrade to no warning.
+    return [];
+  }
+}
 
 export async function readWorkbook(filePath: string, responseFormat: ResponseFormat = 'json'): Promise<string> {
   const workbook = await loadWorkbook(filePath);
@@ -169,20 +186,33 @@ export async function getCell(
   cellAddress: string,
   responseFormat: ResponseFormat = 'json'
 ): Promise<string> {
+  // Always reads fresh from disk; no in-process cache.
+  // If Excel is running with this file open, we add a warnings entry to
+  // surface that on-disk state may not reflect unsaved live changes.
+  const warnings = await getStaleReadWarnings(filePath);
+
   const workbook = await loadWorkbook(filePath);
   const sheet = getSheet(workbook, sheetName);
 
   const cell = sheet.getCell(cellAddress);
-  const result = {
+  const result: any = {
     address: cellAddress,
     value: cell.value,
     type: cell.type,
     formula: cell.formula,
     numFmt: cell.numFmt,
   };
+  if (warnings.length > 0) {
+    result.warnings = warnings;
+  }
 
   if (responseFormat === 'markdown') {
-    let md = `# Cell: ${cellAddress}\n\n`;
+    let md = '';
+    if (warnings.length > 0) {
+      for (const w of warnings) md += `> **Warning:** ${w}\n`;
+      md += '\n';
+    }
+    md += `# Cell: ${cellAddress}\n\n`;
     md += `**Sheet**: ${sheetName}\n`;
     md += `**Value**: ${cellValueToString(cell.value)}\n`;
     md += `**Type**: ${cell.type}\n`;
@@ -204,18 +234,31 @@ export async function getFormula(
   cellAddress: string,
   responseFormat: ResponseFormat = 'json'
 ): Promise<string> {
+  // Always reads fresh from disk; no in-process cache.
+  // If Excel is running with this file open, we add a warnings entry to
+  // surface that on-disk state may not reflect unsaved live changes.
+  const warnings = await getStaleReadWarnings(filePath);
+
   const workbook = await loadWorkbook(filePath);
   const sheet = getSheet(workbook, sheetName);
 
   const cell = sheet.getCell(cellAddress);
-  const result = {
+  const result: any = {
     address: cellAddress,
     formula: cell.formula || null,
     value: cell.value,
   };
+  if (warnings.length > 0) {
+    result.warnings = warnings;
+  }
 
   if (responseFormat === 'markdown') {
-    let md = `# Formula: ${cellAddress}\n\n`;
+    let md = '';
+    if (warnings.length > 0) {
+      for (const w of warnings) md += `> **Warning:** ${w}\n`;
+      md += '\n';
+    }
+    md += `# Formula: ${cellAddress}\n\n`;
     md += `**Sheet**: ${sheetName}\n`;
     if (cell.formula) {
       md += `**Formula**: =${cell.formula}\n`;
@@ -352,19 +395,25 @@ export async function readSheetMergedAware(
   const window = { startRow, startCol, endRow, endCol };
   const mergesInWindow = allMerges.filter((m) => rectsOverlap(m, window));
 
-  // Fill merged-region cells with the top-left value.
-  if (fillMerged) {
-    for (const m of mergesInWindow) {
-      // Top-left value comes from the actual cell (lives outside window if
-      // the merge starts before the window; we still need the value).
-      const topLeftValue = sheet.getRow(m.startRow).getCell(m.startCol).value;
-      const ir0 = Math.max(m.startRow, startRow);
-      const ir1 = Math.min(m.endRow, endRow);
-      const ic0 = Math.max(m.startCol, startCol);
-      const ic1 = Math.min(m.endCol, endCol);
-      for (let r = ir0; r <= ir1; r++) {
-        for (let c = ic0; c <= ic1; c++) {
+  // Fill — or null out — merged-region cells.
+  // ExcelJS surfaces the top-left value for every cell in a merge when accessed
+  // via getCell. With fillMerged:true (default) we explicitly write that value
+  // to every cell in the matrix (so callers don't have to consult getCell).
+  // With fillMerged:false we null out everything except the top-left so callers
+  // see "real" cell content only.
+  for (const m of mergesInWindow) {
+    const topLeftValue = sheet.getRow(m.startRow).getCell(m.startCol).value;
+    const ir0 = Math.max(m.startRow, startRow);
+    const ir1 = Math.min(m.endRow, endRow);
+    const ic0 = Math.max(m.startCol, startCol);
+    const ic1 = Math.min(m.endCol, endCol);
+    for (let r = ir0; r <= ir1; r++) {
+      for (let c = ic0; c <= ic1; c++) {
+        const isTopLeft = r === m.startRow && c === m.startCol;
+        if (fillMerged) {
           data[r - startRow][c - startCol] = topLeftValue;
+        } else if (!isTopLeft) {
+          data[r - startRow][c - startCol] = null;
         }
       }
     }
